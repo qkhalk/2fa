@@ -189,6 +189,37 @@ select:focus {
   margin-top: 0.8rem;
 }
 
+.import-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.inline-action {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.inline-action input {
+  flex: 1;
+}
+
+.import-status {
+  margin: 0.65rem 0 0;
+  min-height: 1.1rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.import-status.error {
+  color: #ffb2b2;
+}
+
+.import-status.success {
+  color: #9df5df;
+}
+
 .persist-row {
   margin-top: 0.75rem;
   display: flex;
@@ -419,6 +450,10 @@ select:focus {
 
 @media (max-width: 760px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .import-grid {
     grid-template-columns: 1fr;
   }
 

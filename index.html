@@ -55,14 +55,31 @@
 
         <div class="actions">
           <button type="submit" class="btn primary">Save Entry</button>
-          <button type="button" id="parse-uri" class="btn ghost">Parse otpauth:// URI</button>
+          <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
+          <button type="button" id="import-clipboard" class="btn ghost">Import from Clipboard</button>
           <button type="button" id="clear-all" class="btn danger">Clear All</button>
         </div>
 
         <label class="uri-row">
-          <span>Optional URI</span>
+          <span>otpauth:// URI</span>
           <input id="uri" type="text" placeholder="otpauth://totp/GitHub:jane?secret=...&period=30&digits=6">
         </label>
+
+        <div class="import-grid">
+          <label>
+            <span>QR image file</span>
+            <input id="qr-file" type="file" accept="image/*">
+          </label>
+          <label>
+            <span>QR image URL</span>
+            <div class="inline-action">
+              <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
+              <button type="button" id="import-qr-url" class="btn ghost small">Import Link</button>
+            </div>
+          </label>
+        </div>
+
+        <p id="import-status" class="import-status" aria-live="polite"></p>
 
         <label class="persist-row">
           <input id="persist-toggle" type="checkbox">
@@ -125,6 +142,7 @@
     </form>
   </dialog>
 
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
   <script src="./app.js" defer></script>
 </body>
 </html>

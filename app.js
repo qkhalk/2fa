@@ -11,10 +11,15 @@ const uriInput = document.getElementById("uri");
 const persistToggle = document.getElementById("persist-toggle");
 const privacyDialog = document.getElementById("privacy-dialog");
 const parseUriBtn = document.getElementById("parse-uri");
+const importClipboardBtn = document.getElementById("import-clipboard");
+const qrFileInput = document.getElementById("qr-file");
+const qrUrlInput = document.getElementById("qr-url");
+const importQrUrlBtn = document.getElementById("import-qr-url");
 const clearAllBtn = document.getElementById("clear-all");
 const entriesRoot = document.getElementById("entries");
 const template = document.getElementById("entry-template");
 const searchInput = document.getElementById("search");
+const importStatus = document.getElementById("import-status");
 const timerValue = document.getElementById("timer-value");
 const timerBar = document.getElementById("timer-bar");
 
@@ -215,6 +220,95 @@ function showEmptyState() {
   entriesRoot.appendChild(empty);
 }
 
+function setImportStatus(message, tone = "") {
+  importStatus.textContent = message;
+  importStatus.classList.remove("error", "success");
+  if (tone) importStatus.classList.add(tone);
+}
+
+function normalizeUriCandidate(raw) {
+  return (raw || "").trim().replace(/[)\],.;]+$/, "");
+}
+
+function findOtpAuthUri(rawText) {
+  const text = normalizeUriCandidate(rawText);
+  if (!text) return "";
+  if (text.startsWith("otpauth://")) return text;
+
+  const directMatch = text.match(/otpauth:\/\/[^\s"']+/i);
+  if (directMatch) return normalizeUriCandidate(directMatch[0]);
+
+  try {
+    const decoded = decodeURIComponent(text);
+    if (decoded.startsWith("otpauth://")) return normalizeUriCandidate(decoded);
+    const decodedMatch = decoded.match(/otpauth:\/\/[^\s"']+/i);
+    if (decodedMatch) return normalizeUriCandidate(decodedMatch[0]);
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function hasDuplicateEntry(secret, digits, period) {
+  const cleanSecret = sanitizeBase32(secret);
+  return entries.some((entry) => {
+    return entry.secret === cleanSecret && entry.digits === digits && entry.period === period;
+  });
+}
+
+function importOtpAuthUri(otpUri, sourceLabel = "Import") {
+  const parsed = parseOtpAuthUri(otpUri);
+  if (hasDuplicateEntry(parsed.secret, parsed.digits, parsed.period)) {
+    setImportStatus(`${sourceLabel}: this account already exists`, "error");
+    return;
+  }
+
+  addEntry({
+    label: parsed.label,
+    secret: parsed.secret,
+    digits: parsed.digits,
+    period: parsed.period,
+  });
+  renderEntries();
+  tick();
+  setImportStatus(`${sourceLabel}: account imported`, "success");
+}
+
+async function decodeQrFromBlob(blob) {
+  if (typeof jsQR !== "function") {
+    throw new Error("QR library failed to load");
+  }
+
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(imageData.data, imageData.width, imageData.height, {
+    inversionAttempts: "attemptBoth",
+  });
+
+  if (!code || !code.data) {
+    throw new Error("Could not detect a QR code in that image");
+  }
+
+  return code.data;
+}
+
+async function importFromQrBlob(blob, sourceLabel) {
+  const qrText = await decodeQrFromBlob(blob);
+  const otpUri = findOtpAuthUri(qrText);
+  if (!otpUri) {
+    throw new Error("QR does not contain an otpauth:// URI");
+  }
+  importOtpAuthUri(otpUri, sourceLabel);
+}
+
 function showNoMatchState() {
   entriesRoot.innerHTML = "";
   const empty = document.createElement("p");
@@ -355,12 +449,19 @@ async function tick() {
 function addEntry({ label, secret, digits, period }) {
   const cleanedSecret = sanitizeBase32(secret);
   const finalLabel = label.trim() || createFallbackLabel(cleanedSecret);
+  const normalizedDigits = digits === 8 ? 8 : 6;
+  const normalizedPeriod = Math.max(15, Math.min(120, Number(period) || 30));
+
+  if (hasDuplicateEntry(cleanedSecret, normalizedDigits, normalizedPeriod)) {
+    throw new Error("This account already exists");
+  }
+
   entries.push({
     id: generateEntryId(),
     label: finalLabel,
     secret: cleanedSecret,
-    digits: digits === 8 ? 8 : 6,
-    period: Math.max(15, Math.min(120, Number(period) || 30)),
+    digits: normalizedDigits,
+    period: normalizedPeriod,
   });
   saveEntries();
 }
@@ -388,18 +489,80 @@ form.addEventListener("submit", (event) => {
 
 parseUriBtn.addEventListener("click", () => {
   try {
-    const parsed = parseOtpAuthUri(uriInput.value.trim());
-    labelInput.value = parsed.label;
-    secretInput.value = parsed.secret;
-    digitsInput.value = String(parsed.digits);
-    periodInput.value = String(parsed.period);
+    const otpUri = findOtpAuthUri(uriInput.value);
+    if (!otpUri) {
+      throw new Error("No otpauth:// URI found");
+    }
+    importOtpAuthUri(otpUri, "URI");
+    uriInput.value = "";
   } catch (error) {
-    alert(error.message || "Invalid URI");
+    setImportStatus(error.message || "Invalid URI", "error");
+  }
+});
+
+qrFileInput.addEventListener("change", async () => {
+  const [file] = qrFileInput.files || [];
+  if (!file) return;
+
+  setImportStatus("Reading QR file...");
+  try {
+    await importFromQrBlob(file, "QR file");
+  } catch (error) {
+    setImportStatus(error.message || "Failed to import QR file", "error");
+  } finally {
+    qrFileInput.value = "";
+  }
+});
+
+importQrUrlBtn.addEventListener("click", async () => {
+  const url = (qrUrlInput.value || "").trim();
+  if (!url) {
+    setImportStatus("Please enter a QR image URL", "error");
+    return;
+  }
+
+  setImportStatus("Fetching QR image URL...");
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Could not download QR image URL");
+    const blob = await response.blob();
+    await importFromQrBlob(blob, "QR URL");
+  } catch (error) {
+    setImportStatus(
+      error.message || "Failed to import from URL (remote image may block cross-origin access)",
+      "error"
+    );
+  }
+});
+
+importClipboardBtn.addEventListener("click", async () => {
+  setImportStatus("Reading clipboard...");
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.read === "function") {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        await importFromQrBlob(blob, "Clipboard image");
+        return;
+      }
+    }
+
+    const text = await navigator.clipboard.readText();
+    const otpUri = findOtpAuthUri(text);
+    if (!otpUri) {
+      throw new Error("Clipboard has no otpauth:// URI or QR image");
+    }
+    importOtpAuthUri(otpUri, "Clipboard");
+  } catch (error) {
+    setImportStatus(error.message || "Failed to import from clipboard", "error");
   }
 });
 
 clearAllBtn.addEventListener("click", () => {
   entries = [];
+  setImportStatus("", "");
   if (persistEnabled) {
     saveEntries();
   } else {
