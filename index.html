@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal OTP Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="bg-orb orb-1" aria-hidden="true"></div>
+  <div class="bg-orb orb-2" aria-hidden="true"></div>
+
+  <main class="app-shell">
+    <header class="hero">
+      <p class="kicker">offline-friendly</p>
+      <h1>Personal OTP Vault</h1>
+      <p class="subtitle">
+        A local TOTP generator page inspired by 2FA quick-code tools. Secrets stay in your browser.
+      </p>
+    </header>
+
+    <section class="panel panel-input">
+      <h2>Add OTP Entry</h2>
+      <p class="privacy-note">
+        Privacy first: codes are generated locally in your browser. Saving secrets to this device is optional.
+      </p>
+      <form id="otp-form" autocomplete="off">
+        <div class="grid">
+          <label>
+            <span>Base32 Secret</span>
+            <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
+          </label>
+
+          <label>
+            <span>Label (optional)</span>
+            <input id="label" name="label" type="text" placeholder="GitHub - jane@site.com">
+          </label>
+
+          <label>
+            <span>Digits</span>
+            <select id="digits" name="digits">
+              <option value="6" selected>6</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Period (seconds)</span>
+            <input id="period" name="period" type="number" min="15" max="120" value="30" required>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn primary">Save Entry</button>
+          <button type="button" id="parse-uri" class="btn ghost">Parse otpauth:// URI</button>
+          <button type="button" id="clear-all" class="btn danger">Clear All</button>
+        </div>
+
+        <label class="uri-row">
+          <span>Optional URI</span>
+          <input id="uri" type="text" placeholder="otpauth://totp/GitHub:jane?secret=...&period=30&digits=6">
+        </label>
+
+        <label class="persist-row">
+          <input id="persist-toggle" type="checkbox">
+          <span>Remember entries on this device (uses localStorage, less safe on shared devices)</span>
+        </label>
+      </form>
+    </section>
+
+    <section class="panel panel-codes">
+      <div class="codes-header">
+        <h2>Current Codes</h2>
+        <div class="timer-wrap">
+          <span id="timer-value">30s</span>
+          <div class="timer-track"><div id="timer-bar"></div></div>
+        </div>
+      </div>
+
+      <div id="entries" class="entries" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <template id="entry-template">
+    <article class="entry">
+      <div class="entry-main">
+        <h3 class="entry-label"></h3>
+        <p class="entry-code">------</p>
+      </div>
+      <div class="entry-actions">
+        <button type="button" class="btn small copy">Copy</button>
+        <button type="button" class="btn small remove">Remove</button>
+      </div>
+    </article>
+  </template>
+
+  <dialog id="privacy-dialog" class="privacy-dialog">
+    <form method="dialog" class="privacy-dialog-card">
+      <h3>Before enabling device storage</h3>
+      <p>
+        Your 2FA secrets will be saved in <code>localStorage</code> on this browser. Anyone with access to this
+        browser profile may be able to read them.
+      </p>
+      <p>
+        Use this only on a trusted personal device.
+      </p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">Cancel</button>
+        <button value="accept" class="btn primary" type="submit">I Understand</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
