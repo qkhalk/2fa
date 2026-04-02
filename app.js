@@ -14,11 +14,15 @@ const parseUriBtn = document.getElementById("parse-uri");
 const clearAllBtn = document.getElementById("clear-all");
 const entriesRoot = document.getElementById("entries");
 const template = document.getElementById("entry-template");
+const searchInput = document.getElementById("search");
 const timerValue = document.getElementById("timer-value");
 const timerBar = document.getElementById("timer-bar");
 
 let persistEnabled = loadPersistPreference();
 let entries = loadEntries();
+let entryNodes = new Map();
+
+ensureEntryIds();
 
 function loadPersistPreference() {
   return localStorage.getItem(PERSIST_KEY) === "true";
@@ -162,6 +166,46 @@ function createFallbackLabel(secret) {
   return `Secret ${clean.slice(0, 4)}...${clean.slice(-4)}`;
 }
 
+function sortedEntries() {
+  return [...entries].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+}
+
+function normalizedLabel(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function getVisibleEntries() {
+  const q = normalizedLabel(searchInput.value);
+  const sorted = sortedEntries();
+  if (!q) return sorted;
+  return sorted.filter((entry) => normalizedLabel(entry.label).includes(q));
+}
+
+function getIssuerInitials(label) {
+  const clean = (label || "").trim();
+  if (!clean) return "OT";
+
+  const issuer = clean.includes(":") ? clean.split(":")[0] : clean.split("-")[0];
+  const parts = issuer.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return clean.slice(0, 2).toUpperCase();
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+}
+
+function generateEntryId() {
+  return `entry_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function ensureEntryIds() {
+  let changed = false;
+  entries = entries.map((entry) => {
+    if (entry.id) return entry;
+    changed = true;
+    return { ...entry, id: generateEntryId() };
+  });
+  if (changed) saveEntries();
+}
+
 function showEmptyState() {
   entriesRoot.innerHTML = "";
   const empty = document.createElement("p");
@@ -171,63 +215,130 @@ function showEmptyState() {
   entriesRoot.appendChild(empty);
 }
 
-async function renderEntries() {
+function showNoMatchState() {
+  entriesRoot.innerHTML = "";
+  const empty = document.createElement("p");
+  empty.style.margin = "0.2rem 0 0";
+  empty.style.color = "var(--muted)";
+  empty.textContent = "No matching entries.";
+  entriesRoot.appendChild(empty);
+}
+
+function createEntryNode(entry) {
+  const node = template.content.firstElementChild.cloneNode(true);
+  const avatar = node.querySelector(".entry-avatar");
+  const label = node.querySelector(".entry-label");
+  const meta = node.querySelector(".entry-meta");
+  const copyBtn = node.querySelector(".copy");
+  const removeBtn = node.querySelector(".remove");
+
+  avatar.textContent = getIssuerInitials(entry.label);
+  label.textContent = entry.label;
+  meta.textContent = `${entry.digits} digits • ${entry.period}s`;
+
+  copyBtn.onclick = async () => {
+    const latestCode = node.dataset.otp;
+    if (!latestCode) return;
+
+    try {
+      await navigator.clipboard.writeText(latestCode);
+      copyBtn.textContent = "Copied";
+      setTimeout(() => {
+        copyBtn.textContent = "Copy";
+      }, 1000);
+    } catch {
+      copyBtn.textContent = "Failed";
+      setTimeout(() => {
+        copyBtn.textContent = "Copy";
+      }, 1000);
+    }
+  };
+
+  removeBtn.onclick = () => {
+    entries = entries.filter((item) => item.id !== entry.id);
+    saveEntries();
+    renderEntries();
+    tick();
+  };
+
+  return node;
+}
+
+function renderEntries() {
   if (entries.length === 0) {
+    entryNodes.clear();
     showEmptyState();
     return;
   }
 
+  const visibleEntries = getVisibleEntries();
+  if (visibleEntries.length === 0) {
+    showNoMatchState();
+    return;
+  }
+
   entriesRoot.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+  const activeIds = new Set();
 
-  for (let i = 0; i < entries.length; i += 1) {
-    const entry = entries[i];
-    const node = template.content.firstElementChild.cloneNode(true);
-    const label = node.querySelector(".entry-label");
-    const code = node.querySelector(".entry-code");
-    const copyBtn = node.querySelector(".copy");
-    const removeBtn = node.querySelector(".remove");
-
-    label.textContent = entry.label;
-
-    try {
-      const otp = await generateTotp(entry.secret, entry.digits, entry.period);
-      code.textContent = formatCode(otp);
-      copyBtn.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(otp);
-          copyBtn.textContent = "Copied";
-          setTimeout(() => {
-            copyBtn.textContent = "Copy";
-          }, 1000);
-        } catch {
-          copyBtn.textContent = "Failed";
-          setTimeout(() => {
-            copyBtn.textContent = "Copy";
-          }, 1000);
-        }
-      };
-    } catch {
-      code.textContent = "Invalid secret";
-      copyBtn.disabled = true;
+  for (const entry of visibleEntries) {
+    activeIds.add(entry.id);
+    let node = entryNodes.get(entry.id);
+    if (!node) {
+      node = createEntryNode(entry);
+      entryNodes.set(entry.id, node);
     }
+    fragment.appendChild(node);
+  }
 
-    removeBtn.onclick = () => {
-      entries.splice(i, 1);
-      saveEntries();
-      renderEntries();
-    };
+  for (const [id] of entryNodes) {
+    if (!activeIds.has(id)) {
+      entryNodes.delete(id);
+    }
+  }
 
-    entriesRoot.appendChild(node);
+  entriesRoot.appendChild(fragment);
+}
+
+async function updateEntryNode(entry, now) {
+  const node = entryNodes.get(entry.id);
+  if (!node) return;
+
+  const code = node.querySelector(".entry-code");
+  const copyBtn = node.querySelector(".copy");
+  const seconds = node.querySelector(".entry-seconds");
+  const bar = node.querySelector(".entry-bar");
+
+  const remaining = entry.period - (now % entry.period);
+  const ratio = remaining / entry.period;
+
+  seconds.textContent = `${remaining}s left`;
+  bar.style.transform = `scaleX(${ratio})`;
+  node.classList.toggle("urgent", remaining <= 10);
+
+  try {
+    const otp = await generateTotp(entry.secret, entry.digits, entry.period);
+    code.textContent = formatCode(otp);
+    node.dataset.otp = otp;
+    copyBtn.disabled = false;
+  } catch {
+    code.textContent = "Invalid secret";
+    node.dataset.otp = "";
+    copyBtn.disabled = true;
   }
 }
 
-function updateTimer() {
+async function updateAllEntries(now) {
+  await Promise.all(getVisibleEntries().map((entry) => updateEntryNode(entry, now)));
+}
+
+function updateTimer(now) {
   let period = 30;
-  if (entries.length > 0) {
-    period = Math.min(...entries.map((entry) => entry.period));
+  const visibleEntries = getVisibleEntries();
+  if (visibleEntries.length > 0) {
+    period = Math.min(...visibleEntries.map((entry) => entry.period));
   }
 
-  const now = Math.floor(Date.now() / 1000);
   const remaining = period - (now % period);
   const ratio = remaining / period;
 
@@ -235,10 +346,17 @@ function updateTimer() {
   timerBar.style.transform = `scaleX(${ratio})`;
 }
 
+async function tick() {
+  const now = Math.floor(Date.now() / 1000);
+  updateTimer(now);
+  await updateAllEntries(now);
+}
+
 function addEntry({ label, secret, digits, period }) {
   const cleanedSecret = sanitizeBase32(secret);
   const finalLabel = label.trim() || createFallbackLabel(cleanedSecret);
   entries.push({
+    id: generateEntryId(),
     label: finalLabel,
     secret: cleanedSecret,
     digits: digits === 8 ? 8 : 6,
@@ -262,6 +380,7 @@ form.addEventListener("submit", (event) => {
     digitsInput.value = "6";
     periodInput.value = "30";
     renderEntries();
+    tick();
   } catch (error) {
     alert(error.message || "Could not add entry");
   }
@@ -287,6 +406,12 @@ clearAllBtn.addEventListener("click", () => {
     clearStoredEntries();
   }
   renderEntries();
+  tick();
+});
+
+searchInput.addEventListener("input", () => {
+  renderEntries();
+  tick();
 });
 
 persistToggle.addEventListener("change", () => {
@@ -329,13 +454,10 @@ privacyDialog.addEventListener("close", () => {
   }
 });
 
-setInterval(() => {
-  updateTimer();
-  renderEntries();
-}, 1000);
+setInterval(tick, 1000);
 
-updateTimer();
 renderEntries();
+tick();
 
 persistToggle.checked = persistEnabled;
 

@@ -74,9 +74,14 @@
     <section class="panel panel-codes">
       <div class="codes-header">
         <h2>Current Codes</h2>
-        <div class="timer-wrap">
-          <span id="timer-value">30s</span>
-          <div class="timer-track"><div id="timer-bar"></div></div>
+        <div class="codes-tools">
+          <label class="search-wrap" aria-label="Search entries">
+            <input id="search" type="search" placeholder="Search entries">
+          </label>
+          <div class="timer-wrap">
+            <span id="timer-value">30s</span>
+            <div class="timer-track"><div id="timer-bar"></div></div>
+          </div>
         </div>
       </div>
 
@@ -86,9 +91,15 @@
 
   <template id="entry-template">
     <article class="entry">
+      <div class="entry-avatar" aria-hidden="true"></div>
       <div class="entry-main">
         <h3 class="entry-label"></h3>
+        <p class="entry-meta"></p>
         <p class="entry-code">------</p>
+        <div class="entry-countdown">
+          <span class="entry-seconds"></span>
+          <div class="entry-track"><div class="entry-bar"></div></div>
+        </div>
       </div>
       <div class="entry-actions">
         <button type="button" class="btn small copy">Copy</button>
