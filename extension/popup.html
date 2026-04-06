@@ -8,32 +8,106 @@
 </head>
 <body>
   <main class="popup-shell">
-    <header>
-      <p class="eyebrow">extension</p>
-      <h1>OTP Vault</h1>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">extension</p>
+        <h1>OTP Vault</h1>
+        <p class="subtitle">Fast codes from your toolbar.</p>
+      </div>
+      <div class="global-timer">
+        <span id="global-seconds">30s</span>
+        <div class="timer-track"><div id="global-bar"></div></div>
+      </div>
     </header>
 
-    <form id="entry-form" autocomplete="off">
-      <input id="label" type="text" placeholder="GitHub:user@example.com">
-      <input id="secret" type="text" placeholder="Base32 secret" required>
-      <div class="row">
-        <select id="digits">
-          <option value="6">6 digits</option>
-          <option value="8">8 digits</option>
-        </select>
-        <input id="period" type="number" min="15" max="120" value="30">
+    <section class="panel compose-panel">
+      <div class="section-head">
+        <h2>Add Entry</h2>
+        <button id="toggle-form" class="ghost-btn" type="button">Hide</button>
       </div>
-      <button type="submit">Add Entry</button>
-    </form>
 
-    <div class="toolbar">
-      <input id="search" type="search" placeholder="Search">
-      <button id="paste-uri" type="button">Paste URI</button>
-    </div>
+      <form id="entry-form" autocomplete="off">
+        <input id="label" type="text" placeholder="GitHub:user@example.com">
+        <input id="secret" type="text" placeholder="Base32 secret" required>
+        <div class="row two-up">
+          <select id="digits">
+            <option value="6">6 digits</option>
+            <option value="8">8 digits</option>
+          </select>
+          <input id="period" type="number" min="15" max="120" value="30">
+        </div>
+        <div class="row two-up import-row">
+          <label class="file-btn ghost-btn">
+            <span>QR File</span>
+            <input id="qr-file" type="file" accept="image/*">
+          </label>
+          <button id="paste-uri" class="ghost-btn" type="button">Paste URI</button>
+        </div>
+        <button type="submit" class="primary-btn">Add Entry</button>
+      </form>
+    </section>
 
-    <p id="status"></p>
-    <div id="entries" class="entries"></div>
+    <section class="panel tools-panel">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search issuer or account">
+        <button id="lock-btn" class="ghost-btn" type="button">Lock</button>
+      </div>
+      <p id="status" class="status" aria-live="polite"></p>
+    </section>
+
+    <section id="unlock-panel" class="panel hidden">
+      <div class="section-head">
+        <h2>Extension Vault</h2>
+      </div>
+      <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
+      <button id="unlock-btn" class="primary-btn" type="button">Unlock</button>
+      <p id="unlock-status" class="status" aria-live="polite"></p>
+    </section>
+
+    <section class="panel settings-panel">
+      <div class="section-head">
+        <h2>Security</h2>
+      </div>
+      <label class="toggle-row">
+        <input id="encrypt-toggle" type="checkbox">
+        <span>Encrypt entries in extension storage</span>
+      </label>
+      <div id="passphrase-fields" class="hidden">
+        <input id="passphrase" type="password" placeholder="New passphrase">
+        <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
+      </div>
+      <button id="save-security" class="ghost-btn" type="button">Save Security Settings</button>
+    </section>
+
+    <section id="entries" class="entries"></section>
   </main>
+
+  <template id="entry-template">
+    <article class="entry-card">
+      <div class="entry-top">
+        <div class="avatar"></div>
+        <div class="identity">
+          <h3 class="issuer"></h3>
+          <p class="account"></p>
+        </div>
+        <button class="icon-btn remove" type="button" title="Remove">x</button>
+      </div>
+
+      <div class="entry-code-row">
+        <p class="code"></p>
+        <button class="ghost-btn copy" type="button">Copy</button>
+      </div>
+
+      <div class="entry-bottom">
+        <span class="meta"></span>
+        <div class="mini-timer">
+          <span class="seconds"></span>
+          <div class="timer-track"><div class="bar"></div></div>
+        </div>
+      </div>
+    </article>
+  </template>
+
   <script src="popup.js"></script>
 </body>
 </html>
