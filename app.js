@@ -485,6 +485,11 @@ var entriesRoot = document.getElementById("entries");
 var template = document.getElementById("entry-template");
 var timerValue = document.getElementById("timer-value");
 var timerBar = document.getElementById("timer-bar");
+var offlineChip = document.getElementById("offline-chip");
+var summaryTotal = document.getElementById("summary-total");
+var summaryPinned = document.getElementById("summary-pinned");
+var summaryGroups = document.getElementById("summary-groups");
+var summaryStorage = document.getElementById("summary-storage");
 var bulkBar = document.getElementById("bulk-bar");
 var bulkSummary = document.getElementById("bulk-summary");
 var bulkTagInput = document.getElementById("bulk-tag-input");
@@ -605,6 +610,22 @@ function syncSettingsUI() {
 function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
   document.body.classList.toggle("screenshot-safe", settings.screenshotSafe);
+}
+
+function renderWorkspaceSummary() {
+  if (!summaryTotal) return;
+  const groups = getEntryGroups().filter(([, groupEntries]) => groupEntries.length > 0);
+  summaryTotal.textContent = String(entries.length);
+  summaryPinned.textContent = String(entries.filter((entry) => entry.pinned).length);
+  summaryGroups.textContent = String(settings.groupBy === "none" ? 1 : Math.max(groups.length, 0));
+  summaryStorage.textContent = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+}
+
+function renderConnectionState() {
+  if (!offlineChip) return;
+  const online = navigator.onLine !== false;
+  offlineChip.textContent = online ? "Online" : "Offline Ready";
+  offlineChip.classList.toggle("offline", !online);
 }
 function setStatus(node, message, tone = "") {
   node.textContent = message;
@@ -963,6 +984,8 @@ function refreshEntryMetadata(node, entry) {
 }
 function renderEntries() {
   setOnboardingVisibility();
+  renderWorkspaceSummary();
+  renderConnectionState();
   if (!unlockPanel.classList.contains("hidden") && settings.encrypt) {
     showEmptyState("Vault is locked. Unlock to view your codes.");
     return;
@@ -1442,6 +1465,8 @@ function registerPwaSupport() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch((error) => reportError("Service worker registration failed", error));
   }
+  window.addEventListener("online", renderConnectionState);
+  window.addEventListener("offline", renderConnectionState);
 }
 function bindEvents() {
   document.addEventListener("keydown", (event) => {

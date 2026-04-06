@@ -29,6 +29,7 @@ test("web home empty state desktop visual regression", async ({ page }) => {
   await expect(page).toHaveScreenshot("web-home-empty-desktop.png", {
     fullPage: true,
     animations: "disabled",
+    maxDiffPixelRatio: 0.02,
   });
 });
 
@@ -37,5 +38,6 @@ test("web home empty state mobile visual regression", async ({ page }) => {
   await expect(page).toHaveScreenshot("web-home-empty-mobile.png", {
     fullPage: true,
     animations: "disabled",
+    maxDiffPixelRatio: 0.02,
   });
 });

@@ -239,6 +239,10 @@ h3 {
   flex-wrap: wrap;
 }
 
+.actions-tight {
+  gap: 8px;
+}
+
 .btn {
   border: 1px solid transparent;
   border-radius: 999px;
@@ -372,6 +376,10 @@ h3 {
   gap: 16px;
 }
 
+.control-rail {
+  position: relative;
+}
+
 .rail-panel,
 .workspace-main {
   border-radius: 26px;
@@ -385,6 +393,25 @@ h3 {
 .section-heading {
   display: grid;
   gap: 8px;
+}
+
+.control-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.rail-section {
+  display: grid;
+  gap: 14px;
+}
+
+.rail-section + .rail-section {
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rail-head {
+  padding-bottom: 8px;
 }
 
 .onboarding {
@@ -482,6 +509,54 @@ textarea {
   align-items: stretch;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.workspace-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  color: var(--accent-soft);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.workspace-chip.offline {
+  color: #ffe79a;
+  border-color: rgba(255, 217, 120, 0.26);
+}
+
+.workspace-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 8px;
+}
+
+.summary-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.summary-card strong {
+  font-size: clamp(1.1rem, 2vw, 1.5rem);
 }
 
 .toolbar-controls {
@@ -847,6 +922,18 @@ textarea {
   .workspace-main {
     min-height: auto;
   }
+
+  .control-rail {
+    order: 2;
+  }
+
+  .workspace-main {
+    order: 1;
+  }
+
+  .inspector-rail {
+    order: 3;
+  }
 }
 
 @media (max-width: 900px) {
@@ -883,12 +970,17 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .workspace-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .inline-action,
   .toolbar-controls,
   .bulk-bar,
   .hero-actions,
   .unlock-actions,
-  .dialog-actions {
+  .dialog-actions,
+  .workspace-status {
     flex-direction: column;
     align-items: stretch;
   }

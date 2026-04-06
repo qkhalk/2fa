@@ -62,158 +62,154 @@
 
     <section class="workspace">
       <aside class="control-rail">
-        <section id="onboarding" class="onboarding">
-          <div class="section-heading">
-            <p class="eyebrow">onboarding</p>
-            <h2>Three steps to a safer vault</h2>
-          </div>
-          <ol class="onboarding-steps">
-            <li><strong>Import or type</strong> secrets via URI, QR, clipboard, or manual Base32 entry.</li>
-            <li><strong>Review before saving</strong> to catch mismatched issuers, duplicates, and false positives.</li>
-            <li><strong>Protect your device</strong> with encryption, backup exports, and screenshot-safe privacy mode.</li>
-          </ol>
-        </section>
-
-        <section class="rail-panel compose-panel">
-          <div class="section-heading">
-            <p class="eyebrow">manual entry</p>
-            <h2>Add OTP Entry</h2>
-            <p class="helper-text">Use tags to group accounts by project, team, or device.</p>
+        <section class="rail-panel control-stack">
+          <div class="section-heading rail-head">
+            <p class="eyebrow">vault controls</p>
+            <h2>Add, import, and protect</h2>
+            <p class="helper-text">One rail for setup. The main workspace stays focused on daily use and active codes.</p>
           </div>
 
-          <form id="otp-form" autocomplete="off">
-            <div class="grid">
-              <label>
-                <span>Base32 Secret</span>
-                <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
-              </label>
-
-              <label>
-                <span>Label (optional)</span>
-                <input id="label" name="label" type="text" placeholder="GitHub:user@example.com">
-              </label>
-
-              <label>
-                <span>Tags</span>
-                <input id="tags" name="tags" type="text" placeholder="work, infra, personal">
-              </label>
-
-              <label>
-                <span>Digits</span>
-                <select id="digits" name="digits">
-                  <option value="6" selected>6</option>
-                  <option value="8">8</option>
-                </select>
-              </label>
-
-              <label>
-                <span>Period (seconds)</span>
-                <input id="period" name="period" type="number" min="15" max="120" value="30" required>
-              </label>
+          <section class="rail-section compose-panel">
+            <div class="section-heading">
+              <p class="eyebrow">manual entry</p>
+              <h3>Add OTP Entry</h3>
+              <p class="helper-text">Use tags to group accounts by project, team, or device.</p>
             </div>
 
-            <div class="actions">
-              <button type="submit" class="btn primary">Save Entry</button>
-              <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
-              <button type="button" id="import-clipboard" class="btn ghost">Clipboard</button>
-              <button type="button" id="clear-all" class="btn danger">Clear All</button>
-            </div>
+            <form id="otp-form" autocomplete="off">
+              <div class="grid">
+                <label>
+                  <span>Base32 Secret</span>
+                  <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
+                </label>
 
-            <label class="stack-field">
-              <span>Paste one or many `otpauth://` URIs</span>
-              <textarea id="uri" rows="3" placeholder="Paste one or many OTP URIs here. The vault will preview valid matches before import."></textarea>
-            </label>
+                <label>
+                  <span>Label (optional)</span>
+                  <input id="label" name="label" type="text" placeholder="GitHub:user@example.com">
+                </label>
 
-            <div class="grid import-grid">
-              <label>
-                <span>QR image file</span>
-                <input id="qr-file" type="file" accept="image/*">
-              </label>
+                <label>
+                  <span>Tags</span>
+                  <input id="tags" name="tags" type="text" placeholder="work, infra, personal">
+                </label>
 
-              <label>
-                <span>QR image URL</span>
-                <div class="inline-action">
-                  <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
-                  <button type="button" id="import-qr-url" class="btn ghost small">Import</button>
-                </div>
-              </label>
-            </div>
+                <label>
+                  <span>Digits</span>
+                  <select id="digits" name="digits">
+                    <option value="6" selected>6</option>
+                    <option value="8">8</option>
+                  </select>
+                </label>
 
-            <div class="scan-box">
-              <div class="scan-head">
-                <div>
-                  <p class="eyebrow">camera import</p>
-                  <h3>Confirm scans over two frames</h3>
-                </div>
-                <div class="scan-actions">
-                  <button type="button" id="start-camera" class="btn ghost small">Start Camera</button>
-                  <button type="button" id="stop-camera" class="btn ghost small">Stop</button>
-                </div>
+                <label>
+                  <span>Period (seconds)</span>
+                  <input id="period" name="period" type="number" min="15" max="120" value="30" required>
+                </label>
               </div>
-              <video id="camera-preview" playsinline muted></video>
-              <p class="helper-text">A scan is only accepted after it repeats, reducing accidental false positives.</p>
+
+              <div class="actions actions-tight">
+                <button type="submit" class="btn primary">Save Entry</button>
+                <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
+                <button type="button" id="import-clipboard" class="btn ghost">Clipboard</button>
+                <button type="button" id="clear-all" class="btn danger">Clear All</button>
+              </div>
+
+              <label class="stack-field">
+                <span>Paste one or many `otpauth://` URIs</span>
+                <textarea id="uri" rows="3" placeholder="Paste one or many OTP URIs here. The vault will preview valid matches before import."></textarea>
+              </label>
+
+              <div class="grid import-grid">
+                <label>
+                  <span>QR image file</span>
+                  <input id="qr-file" type="file" accept="image/*">
+                </label>
+
+                <label>
+                  <span>QR image URL</span>
+                  <div class="inline-action">
+                    <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
+                    <button type="button" id="import-qr-url" class="btn ghost small">Import</button>
+                  </div>
+                </label>
+              </div>
+
+              <div class="scan-box">
+                <div class="scan-head">
+                  <div>
+                    <p class="eyebrow">camera import</p>
+                    <h3>Confirm scans over two frames</h3>
+                  </div>
+                  <div class="scan-actions">
+                    <button type="button" id="start-camera" class="btn ghost small">Start Camera</button>
+                    <button type="button" id="stop-camera" class="btn ghost small">Stop</button>
+                  </div>
+                </div>
+                <video id="camera-preview" playsinline muted></video>
+                <p class="helper-text">A scan is only accepted after it repeats, reducing accidental false positives.</p>
+              </div>
+
+              <p id="import-status" class="helper-text status-line" aria-live="polite"></p>
+            </form>
+          </section>
+
+          <section class="rail-section settings-panel">
+            <div class="section-heading">
+              <p class="eyebrow">privacy</p>
+              <h3>Device & Backup Controls</h3>
             </div>
 
-            <p id="import-status" class="helper-text status-line" aria-live="polite"></p>
-          </form>
-        </section>
+            <form id="settings-form">
+            <div class="toggle-grid">
+              <label class="toggle-row">
+                <input id="persist-toggle" type="checkbox">
+                <span>Remember entries on this device</span>
+              </label>
+              <label class="toggle-row">
+                <input id="encrypt-toggle" type="checkbox">
+                <span>Encrypt stored entries with a passphrase</span>
+              </label>
+              <label class="toggle-row">
+                <input id="unlock-on-load" type="checkbox">
+                <span>Require unlock when opening this app</span>
+              </label>
+              <label class="toggle-row">
+                <input id="blur-codes-toggle" type="checkbox">
+                <span>Blur OTP codes until hovered or focused</span>
+              </label>
+              <label class="toggle-row">
+                <input id="screenshot-safe-toggle" type="checkbox">
+                <span>Screenshot-safe mode hides codes until revealed</span>
+              </label>
+              <label class="toggle-row">
+                <input id="clear-clipboard-toggle" type="checkbox">
+                <span>Clear clipboard 30 seconds after copy</span>
+              </label>
+            </div>
 
-        <section class="rail-panel settings-panel">
-          <div class="section-heading">
-            <p class="eyebrow">privacy</p>
-            <h2>Device & Backup Controls</h2>
-          </div>
+            <div id="encryption-fields" class="grid hidden">
+              <label>
+                <span>Vault passphrase</span>
+                <input id="vault-passphrase" type="password" placeholder="Use a strong passphrase">
+              </label>
+              <label>
+                <span>Confirm passphrase</span>
+                <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
+              </label>
+            </div>
 
-          <form id="settings-form">
-          <div class="toggle-grid">
-            <label class="toggle-row">
-              <input id="persist-toggle" type="checkbox">
-              <span>Remember entries on this device</span>
-            </label>
-            <label class="toggle-row">
-              <input id="encrypt-toggle" type="checkbox">
-              <span>Encrypt stored entries with a passphrase</span>
-            </label>
-            <label class="toggle-row">
-              <input id="unlock-on-load" type="checkbox">
-              <span>Require unlock when opening this app</span>
-            </label>
-            <label class="toggle-row">
-              <input id="blur-codes-toggle" type="checkbox">
-              <span>Blur OTP codes until hovered or focused</span>
-            </label>
-            <label class="toggle-row">
-              <input id="screenshot-safe-toggle" type="checkbox">
-              <span>Screenshot-safe mode hides codes until revealed</span>
-            </label>
-            <label class="toggle-row">
-              <input id="clear-clipboard-toggle" type="checkbox">
-              <span>Clear clipboard 30 seconds after copy</span>
-            </label>
-          </div>
+            <div class="actions actions-tight">
+              <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
+              <label class="btn ghost backup-import-label">
+                <span>Import Backup</span>
+                <input id="import-backup" type="file" accept="application/json">
+              </label>
+              <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
+            </div>
 
-          <div id="encryption-fields" class="grid hidden">
-            <label>
-              <span>Vault passphrase</span>
-              <input id="vault-passphrase" type="password" placeholder="Use a strong passphrase">
-            </label>
-            <label>
-              <span>Confirm passphrase</span>
-              <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
-            </label>
-          </div>
-
-          <div class="actions">
-            <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
-            <label class="btn ghost backup-import-label">
-              <span>Import Backup</span>
-              <input id="import-backup" type="file" accept="application/json">
-            </label>
-            <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
-          </div>
-
-          <p id="settings-status" class="helper-text status-line" aria-live="polite"></p>
-          </form>
+            <p id="settings-status" class="helper-text status-line" aria-live="polite"></p>
+            </form>
+          </section>
         </section>
       </aside>
 
@@ -224,11 +220,33 @@
               <p class="eyebrow">workspace</p>
               <h2>Current Codes</h2>
             </div>
-            <div class="timer-wrap" aria-label="OTP refresh timer">
-              <span id="timer-value">30s</span>
-              <div class="timer-track"><div id="timer-bar"></div></div>
+            <div class="workspace-status">
+              <div class="workspace-chip" id="offline-chip">Online</div>
+              <div class="timer-wrap" aria-label="OTP refresh timer">
+                <span id="timer-value">30s</span>
+                <div class="timer-track"><div id="timer-bar"></div></div>
+              </div>
             </div>
           </div>
+
+          <section class="workspace-summary" id="workspace-summary">
+            <article class="summary-card">
+              <span class="summary-label">Accounts</span>
+              <strong id="summary-total">0</strong>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">Pinned</span>
+              <strong id="summary-pinned">0</strong>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">Groups</span>
+              <strong id="summary-groups">0</strong>
+            </article>
+            <article class="summary-card">
+              <span class="summary-label">Storage</span>
+              <strong id="summary-storage">Session</strong>
+            </article>
+          </section>
 
           <div class="toolbar-controls">
             <label class="search-wrap" aria-label="Search entries">
