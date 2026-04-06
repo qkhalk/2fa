@@ -710,7 +710,7 @@ function getEntryGroups() {
   return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right, void 0, { sensitivity: "base" }));
 }
 function setOnboardingVisibility() {
-  onboardingPanel?.classList.toggle("hidden", entries.length > 0);
+  onboardingPanel?.classList.add("hidden");
 }
 function renderTagRow(node, entry) {
   const tagRow = node.querySelector(".entry-tag-row");
@@ -808,7 +808,41 @@ function addCopyHistory(label, code) {
 }
 function showEmptyState(message) {
   entriesRoot.innerHTML = "";
-  entriesRoot.innerHTML = `<section class="entry-group"><p class="entry-group-title">workspace</p><div class="preview-item">${message}</div></section>`;
+  entriesRoot.innerHTML = `
+    <section class="workspace-empty">
+      <div class="workspace-empty-copy">
+        <p class="entry-group-title">workspace</p>
+        <h3>Vault ready for the first import</h3>
+        <p>${message}</p>
+        <div class="workspace-empty-actions">
+          <button type="button" class="btn small" data-empty-action="focus-secret">Type a secret</button>
+          <button type="button" class="btn small" data-empty-action="focus-uri">Paste OTP URI</button>
+          <button type="button" class="btn small" data-empty-action="start-camera">Scan a QR</button>
+        </div>
+      </div>
+      <div class="workspace-empty-guide">
+        <div class="preview-item">
+          <strong>1. Import or type</strong>
+          <p>Use Base32, URI, clipboard, QR image, or camera.</p>
+        </div>
+        <div class="preview-item">
+          <strong>2. Review and tag</strong>
+          <p>Catch duplicates early and keep the vault organized by project or device.</p>
+        </div>
+        <div class="preview-item">
+          <strong>3. Protect this device</strong>
+          <p>Enable persistence only when needed, then add encryption and backups.</p>
+        </div>
+      </div>
+    </section>`;
+  entriesRoot.querySelectorAll("[data-empty-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.getAttribute("data-empty-action");
+      if (action === "focus-secret") secretInput.focus();
+      if (action === "focus-uri") uriInput.focus();
+      if (action === "start-camera") startCameraBtn.click();
+    });
+  });
 }
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
