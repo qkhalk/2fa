@@ -406,6 +406,17 @@ select:focus {
   color: var(--muted);
 }
 
+.hidden-dialog {
+  width: calc(100% - 24px);
+  max-width: 360px;
+  margin: auto;
+  color: var(--text);
+}
+
+.hidden-dialog::backdrop {
+  background: rgba(5, 10, 20, 0.7);
+}
+
 .collapsed #entry-form {
   display: none;
 }

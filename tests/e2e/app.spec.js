@@ -31,10 +31,10 @@ async function loadApp(page) {
 }
 
 async function addEntry(page, { label, secret, digits = "6", period = "30" }) {
-  await page.getByLabel("Base32 Secret").fill(secret);
-  await page.getByLabel("Label (optional)").fill(label);
-  await page.getByLabel("Digits").selectOption(digits);
-  await page.getByLabel("Period (seconds)").fill(period);
+  await page.locator("#secret").fill(secret);
+  await page.locator("#label").fill(label);
+  await page.locator("#digits").selectOption(digits);
+  await page.locator("#period").fill(period);
   await page.getByRole("button", { name: "Save Entry" }).click();
 }
 
@@ -76,10 +76,21 @@ test("imports OTP URIs from surrounding text and supports search, pin, and remov
   await page.getByRole("button", { name: "Import Entries" }).click();
   await addEntry(page, { label: "Zeta:user@example.com", secret: SECONDARY_SECRET });
 
-  await page.locator(".entry").nth(1).getByRole("button", { name: "Pin" }).click();
+  await page.locator(".entry").nth(1).getByRole("button", { name: "Up" }).click();
   await expect(page.locator(".entry-label").first()).toHaveText("Zeta");
 
-  await page.locator("#search").fill("example");
+  await page.locator(".entry").nth(1).getByRole("button", { name: "Edit" }).click();
+  await expect(page.locator("#edit-entry-dialog")).toBeVisible();
+  await page.locator("#edit-label").fill("Example-updated:user@example.com");
+  await page.locator("#edit-tags").fill("personal");
+  await page.locator("#save-entry-edit").click();
+  await expect(page.locator("#import-status")).toContainText("Entry updated");
+
+  await page.locator("#search").fill("personal");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await page.locator("#search").fill("example-updated");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await page.locator("#search").fill("");
   await expect(page.locator(".entry")).toHaveCount(2);
   await page.locator("#search").fill("zeta");
   await expect(page.locator(".entry")).toHaveCount(1);

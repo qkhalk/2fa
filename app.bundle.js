@@ -84,7 +84,8 @@ function normalizeEntry(entry) {
     period: ensurePeriod(entry.period ?? 30),
     pinned: Boolean(entry.pinned),
     tags: normalizeTags(entry.tags),
-    createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now()
+    createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now(),
+    order: Number.isFinite(Number(entry.order)) ? Number(entry.order) : 0
   };
 }
 function normalizeEntries(entries2) {
@@ -203,8 +204,13 @@ function getEntryGroup(entry, groupBy) {
 function compareEntries(a, b, sortBy = "pinned-alpha") {
   if (sortBy === "recent") return b.createdAt - a.createdAt;
   if (sortBy === "period") return a.period - b.period || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+  if (sortBy === "custom") return a.order - b.order || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
   if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+}
+function nextOrderValue(items = entries) {
+  if (items.length === 0) return 1;
+  return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
 }
 function base32ToBytes(base32) {
   const clean = sanitizeBase32(base32);
@@ -513,6 +519,14 @@ var backupImportMode = document.getElementById("backup-import-mode");
 var backupPassphraseRow = document.getElementById("backup-passphrase-row");
 var backupImportPassphraseInput = document.getElementById("backup-import-passphrase");
 var backupReviewStatus = document.getElementById("backup-review-status");
+var editEntryDialog = document.getElementById("edit-entry-dialog");
+var editEntryIdInput = document.getElementById("edit-entry-id");
+var editLabelInput = document.getElementById("edit-label");
+var editSecretInput = document.getElementById("edit-secret");
+var editTagsInput = document.getElementById("edit-tags");
+var editDigitsInput = document.getElementById("edit-digits");
+var editPeriodInput = document.getElementById("edit-period");
+var editEntryStatus = document.getElementById("edit-entry-status");
 var debugToggleBtn = document.getElementById("debug-toggle");
 var debugPanel = document.getElementById("debug-panel");
 var debugList = document.getElementById("debug-list");
@@ -652,7 +666,8 @@ function loadPlainEntries() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    return normalizeEntries(JSON.parse(raw));
+    const parsed = normalizeEntries(JSON.parse(raw));
+    return parsed.every((entry) => !entry.order) ? resequenceEntries(parsed) : parsed;
   } catch (error) {
     reportError("Failed to load plain entries", error);
     return [];
@@ -728,6 +743,49 @@ function renderBulkBar() {
   bulkBar.classList.toggle("hidden", selectedCount === 0);
   bulkSummary.textContent = `${selectedCount} selected`;
 }
+function resequenceEntries(items) {
+  return items.map((entry, index) => ({
+    ...entry,
+    order: index + 1
+  }));
+}
+function openEditEntryDialog(entry) {
+  if (!editEntryDialog) return;
+  editEntryIdInput.value = entry.id;
+  editLabelInput.value = entry.label;
+  editSecretInput.value = entry.secret;
+  editTagsInput.value = (entry.tags || []).join(", ");
+  editDigitsInput.value = String(entry.digits);
+  editPeriodInput.value = String(entry.period);
+  setStatus(editEntryStatus, "");
+  editEntryDialog.showModal();
+}
+async function saveEditedEntry() {
+  const id = editEntryIdInput.value;
+  const current = entries.find((entry) => entry.id === id);
+  if (!current) throw new Error("Entry no longer exists");
+  const updated = normalizeEntry({
+    ...current,
+    label: editLabelInput.value,
+    secret: editSecretInput.value,
+    tags: normalizeTags(editTagsInput.value),
+    digits: Number(editDigitsInput.value),
+    period: Number(editPeriodInput.value),
+    order: current.order
+  });
+  if (entries.some((entry) => entry.id !== id && entryKey(entry) === entryKey(updated))) {
+    throw new Error("Another entry already uses this secret, digits, and period");
+  }
+  await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
+}
+async function moveEntry(entryId, direction) {
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const index = ordered.findIndex((entry) => entry.id === entryId);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return;
+  [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+  await replaceEntries(resequenceEntries(ordered));
+}
 function addCopyHistory(label, code) {
   copyHistory = [{
     label,
@@ -747,6 +805,9 @@ function createEntryNode(entry) {
   const account = node.querySelector(".entry-account");
   const meta = node.querySelector(".entry-meta");
   const copyBtn = node.querySelector(".copy");
+  const editBtn = node.querySelector(".edit");
+  const moveUpBtn = node.querySelector(".move-up");
+  const moveDownBtn = node.querySelector(".move-down");
   const revealBtn = node.querySelector(".reveal");
   const pinBtn = node.querySelector(".pin");
   const removeBtn = node.querySelector(".remove");
@@ -772,6 +833,33 @@ function createEntryNode(entry) {
     } catch (error) {
       reportError("Copy failed", error);
       setImportStatus(toUserMessage(error, "Could not copy OTP to clipboard"), "error");
+    }
+  };
+  editBtn.onclick = () => {
+    openEditEntryDialog(entry);
+  };
+  moveUpBtn.onclick = async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      saveSettings();
+      await moveEntry(entry.id, -1);
+      setImportStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Move up failed", error);
+      setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
+    }
+  };
+  moveDownBtn.onclick = async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      saveSettings();
+      await moveEntry(entry.id, 1);
+      setImportStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Move down failed", error);
+      setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
     }
   };
   revealBtn.onclick = () => {
@@ -937,6 +1025,9 @@ async function persistEntries() {
 async function replaceEntries(nextEntries) {
   const previousEntries = entries;
   entries = normalizeEntries(nextEntries);
+  if (entries.every((entry) => !entry.order)) {
+    entries = resequenceEntries(entries);
+  }
   selectedEntryIds = new Set([...selectedEntryIds].filter((id) => entries.some((entry) => entry.id === id)));
   try {
     await persistEntries();
@@ -952,7 +1043,7 @@ async function replaceEntries(nextEntries) {
   await tick();
 }
 function buildManualEntry(input) {
-  const entry = normalizeEntry({ ...input, pinned: false });
+  const entry = normalizeEntry({ ...input, pinned: false, order: nextOrderValue() });
   if (hasDuplicateEntry(entries, entry)) {
     throw new Error("This account already exists");
   }
@@ -1016,6 +1107,7 @@ function openImportPreview(candidates, sourceLabel) {
 async function commitImportPreview() {
   if (!importPreviewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
+  let nextOrder = nextOrderValue();
   const rows = [...importPreviewList.querySelectorAll(".preview-item")];
   const enriched = rows.flatMap((row) => {
     const include = row.querySelector(".preview-include");
@@ -1029,7 +1121,8 @@ async function commitImportPreview() {
         ...baseEntry.tags || [],
         ...normalizeTags(row.querySelector(".preview-tags")?.value),
         ...extraTags
-      ])
+      ]),
+      order: nextOrder++
     }];
   });
   if (enriched.length === 0) throw new Error("Select at least one entry to import");
@@ -1065,7 +1158,7 @@ async function unlockVault(passphrase) {
   const normalizedPassphrase = normalizePassphrase(passphrase);
   const decrypted = await decryptStoredEntries(normalizedPassphrase);
   currentPassphrase = normalizedPassphrase;
-  entries = decrypted;
+  entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
   setLocked(false);
   renderEntries();
   await tick();
@@ -1522,6 +1615,13 @@ function bindEvents() {
       commitBackupImport().then(() => setSettingsStatus("Backup imported", "success")).catch((error) => setSettingsStatus(toUserMessage(error, "Could not import backup"), "error"));
     }
     backupImportState = null;
+  });
+  editEntryDialog?.addEventListener("close", () => {
+    if (editEntryDialog.returnValue === "accept") {
+      saveEditedEntry().then(() => setImportStatus("Entry updated", "success")).catch((error) => setStatus(editEntryStatus, toUserMessage(error, "Could not update entry"), "error"));
+    } else {
+      setStatus(editEntryStatus, "");
+    }
   });
 }
 window.otpVaultDebug = {

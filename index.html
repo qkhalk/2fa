@@ -236,6 +236,7 @@
               <span>Sort</span>
               <select id="sort-select">
                 <option value="pinned-alpha">Pinned + A-Z</option>
+                <option value="custom">Manual order</option>
                 <option value="recent">Newest first</option>
                 <option value="period">Fastest timer first</option>
               </select>
@@ -306,6 +307,9 @@
         </div>
       </div>
       <div class="entry-actions">
+        <button type="button" class="btn small edit">Edit</button>
+        <button type="button" class="btn small move-up">Up</button>
+        <button type="button" class="btn small move-down">Down</button>
         <button type="button" class="btn small copy">Copy</button>
         <button type="button" class="btn small reveal">Reveal</button>
         <button type="button" class="btn small pin">Pin</button>
@@ -363,6 +367,44 @@
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">Cancel</button>
         <button id="confirm-backup-import" value="accept" class="btn primary" type="submit">Import Backup</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-entry-dialog" class="dialog-shell">
+    <form method="dialog" class="dialog-card">
+      <p class="eyebrow">edit entry</p>
+      <h3>Edit vault entry</h3>
+      <input id="edit-entry-id" type="hidden">
+      <label>
+        <span>Label</span>
+        <input id="edit-label" type="text" placeholder="GitHub:user@example.com">
+      </label>
+      <label>
+        <span>Secret</span>
+        <input id="edit-secret" type="text" placeholder="JBSWY3DPEHPK3PXP">
+      </label>
+      <label>
+        <span>Tags</span>
+        <input id="edit-tags" type="text" placeholder="work, infra">
+      </label>
+      <div class="grid">
+        <label>
+          <span>Digits</span>
+          <select id="edit-digits">
+            <option value="6">6</option>
+            <option value="8">8</option>
+          </select>
+        </label>
+        <label>
+          <span>Period</span>
+          <input id="edit-period" type="number" min="15" max="120">
+        </label>
+      </div>
+      <p id="edit-entry-status" class="helper-text status-line"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">Cancel</button>
+        <button id="save-entry-edit" value="accept" class="btn primary" type="submit">Save Changes</button>
       </div>
     </form>
   </dialog>

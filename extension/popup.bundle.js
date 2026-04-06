@@ -356,6 +356,16 @@ var passphraseInput = document.getElementById("passphrase");
 var passphraseConfirmInput = document.getElementById("passphrase-confirm");
 var saveSecurityBtn = document.getElementById("save-security");
 var copyHistoryRoot = document.getElementById("copy-history");
+var editEntryDialog = document.getElementById("edit-entry-dialog");
+var editEntryIdInput = document.getElementById("edit-entry-id");
+var editLabelInput = document.getElementById("edit-label");
+var editSecretInput = document.getElementById("edit-secret");
+var editTagsInput = document.getElementById("edit-tags");
+var editDigitsInput = document.getElementById("edit-digits");
+var editPeriodInput = document.getElementById("edit-period");
+var editStatus = document.getElementById("edit-status");
+var cancelEditBtn = document.getElementById("cancel-edit");
+var saveEditBtn = document.getElementById("save-edit");
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var collapsed = false;
@@ -365,7 +375,7 @@ var copyHistory = [];
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
-  settings = { encrypt: false, ...stored[SETTINGS_KEY] || {} };
+  settings = { encrypt: false, sortBy: "alpha", ...stored[SETTINGS_KEY] || {} };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
   sortSelect.value = settings.sortBy || "alpha";
@@ -375,6 +385,7 @@ async function initialize() {
     setLocked(true);
   } else {
     entries = normalizeEntries(stored[STORAGE_KEY]);
+    if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
     setLocked(false);
   }
   bindEvents();
@@ -407,16 +418,26 @@ function setLocked(locked) {
   });
   qrFileInput.disabled = locked;
   searchInput.disabled = locked;
+  sortSelect.disabled = locked;
   pasteUriBtn.disabled = locked;
   lockBtn.disabled = locked || !settings.encrypt;
 }
+function sortEntries(items) {
+  const sorted = [...items];
+  if (settings.sortBy === "custom") {
+    return sorted.sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label, void 0, { sensitivity: "base" }));
+  }
+  if (settings.sortBy === "recent") {
+    return sorted.sort((left, right) => right.createdAt - left.createdAt);
+  }
+  if (settings.sortBy === "period") {
+    return sorted.sort((left, right) => left.period - right.period || left.label.localeCompare(right.label, void 0, { sensitivity: "base" }));
+  }
+  return sorted.sort((left, right) => left.label.localeCompare(right.label, void 0, { sensitivity: "base" }));
+}
 function filteredEntries() {
   const query = (searchInput.value || "").trim().toLowerCase();
-  return [...entries].sort((a, b) => {
-    if (settings.sortBy === "recent") return b.createdAt - a.createdAt;
-    if (settings.sortBy === "period") return a.period - b.period || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
-    return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
-  }).filter((entry) => [entry.label, ...entry.tags || []].join(" ").toLowerCase().includes(query));
+  return sortEntries(entries).filter((entry) => [entry.label, ...entry.tags || []].join(" ").toLowerCase().includes(query));
 }
 function refreshEntryNode(node, entry) {
   const parts = parseLabelParts(entry.label);
@@ -425,22 +446,23 @@ function refreshEntryNode(node, entry) {
   node.querySelector(".account").textContent = parts.account;
   node.querySelector(".meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
   const tagRoot = node.querySelector(".tags");
-  if (tagRoot) {
-    tagRoot.innerHTML = "";
-    for (const tag of entry.tags || []) {
-      const chip = document.createElement("span");
-      chip.className = "tag";
-      chip.textContent = tag;
-      tagRoot.appendChild(chip);
-    }
+  tagRoot.innerHTML = "";
+  for (const tag of entry.tags || []) {
+    const chip = document.createElement("span");
+    chip.className = "tag";
+    chip.textContent = tag;
+    tagRoot.appendChild(chip);
   }
 }
 function addCopyHistory(label, code) {
-  copyHistory = [{
-    label,
-    code: formatCode(code),
-    at: (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-  }, ...copyHistory.filter((item) => item.label !== label)].slice(0, 5);
+  copyHistory = [
+    {
+      label,
+      code: formatCode(code),
+      at: (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    },
+    ...copyHistory.filter((item) => item.label !== label)
+  ].slice(0, 5);
   renderCopyHistory();
 }
 function renderCopyHistory() {
@@ -451,9 +473,56 @@ function renderCopyHistory() {
   }
   copyHistoryRoot.innerHTML = copyHistory.map((item) => `<div class="history-item"><strong>${item.label}</strong><span>${item.code} \u2022 ${item.at}</span></div>`).join("");
 }
+function nextOrderValue(items = entries) {
+  if (items.length === 0) return 1;
+  return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
+}
+function resequenceEntries(items) {
+  return items.map((entry, index) => ({ ...entry, order: index + 1 }));
+}
+function openEditEntryDialog(entry) {
+  if (!editEntryDialog?.showModal) return;
+  editEntryIdInput.value = entry.id;
+  editLabelInput.value = entry.label;
+  editSecretInput.value = entry.secret;
+  editTagsInput.value = (entry.tags || []).join(", ");
+  editDigitsInput.value = String(entry.digits);
+  editPeriodInput.value = String(entry.period);
+  setStatus(editStatus, "");
+  editEntryDialog.showModal();
+}
+async function saveEditedEntry() {
+  const id = editEntryIdInput.value;
+  const current = entries.find((entry) => entry.id === id);
+  if (!current) throw new Error("Entry no longer exists");
+  const updated = normalizeEntry({
+    ...current,
+    label: editLabelInput.value,
+    secret: editSecretInput.value,
+    tags: normalizeTags(editTagsInput.value),
+    digits: Number(editDigitsInput.value),
+    period: Number(editPeriodInput.value),
+    order: current.order
+  });
+  if (entries.some((entry) => entry.id !== id && entry.secret === updated.secret && entry.digits === updated.digits && entry.period === updated.period)) {
+    throw new Error("Another entry already uses this secret, digits, and period");
+  }
+  await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
+}
+async function moveEntry(entryId, direction) {
+  const ordered = sortEntries(entries);
+  const index = ordered.findIndex((entry) => entry.id === entryId);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return;
+  [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+  await replaceEntries(resequenceEntries(ordered));
+}
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
+  const editBtn = node.querySelector(".edit");
+  const moveUpBtn = node.querySelector(".move-up");
+  const moveDownBtn = node.querySelector(".move-down");
   node.querySelector(".copy").addEventListener("click", async () => {
     try {
       const otp = node.dataset.otp;
@@ -465,6 +534,21 @@ function createEntryNode(entry) {
       reportError("Extension copy failed", error);
       setStatus(toUserMessage(error, "Could not copy OTP"), "error");
     }
+  });
+  editBtn?.addEventListener("click", () => {
+    openEditEntryDialog(entry);
+  });
+  moveUpBtn?.addEventListener("click", async () => {
+    settings.sortBy = "custom";
+    sortSelect.value = "custom";
+    await persistSettings();
+    await moveEntry(entry.id, -1);
+  });
+  moveDownBtn?.addEventListener("click", async () => {
+    settings.sortBy = "custom";
+    sortSelect.value = "custom";
+    await persistSettings();
+    await moveEntry(entry.id, 1);
   });
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
@@ -553,6 +637,9 @@ async function persistSettings() {
 async function replaceEntries(nextEntries) {
   const previousEntries = entries;
   entries = normalizeEntries(nextEntries);
+  if (entries.every((entry) => !entry.order)) {
+    entries = resequenceEntries(entries);
+  }
   try {
     await persistEntries();
   } catch (error) {
@@ -565,10 +652,8 @@ async function replaceEntries(nextEntries) {
   await tick();
 }
 async function addEntry(input) {
-  const entry = normalizeEntry(input);
-  if (hasDuplicateEntry(entries, entry)) {
-    throw new Error("This account already exists");
-  }
+  const entry = normalizeEntry({ ...input, order: nextOrderValue() });
+  if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
   await replaceEntries([...entries, entry]);
 }
 async function importFromQrFile(file) {
@@ -586,7 +671,7 @@ async function importFromQrFile(file) {
   if (!uri) {
     throw new Error("QR code was detected but does not contain a valid OTP URI");
   }
-  return parseOtpAuthUri(uri);
+  return normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
 }
 function bindEvents() {
   form.addEventListener("submit", async (event) => {
@@ -629,7 +714,7 @@ function bindEvents() {
       const text = await navigator.clipboard.readText();
       const uri = extractOtpAuthUri(text);
       if (!uri) throw new Error("Clipboard does not contain a valid OTP URI");
-      const entry = parseOtpAuthUri(uri);
+      const entry = normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
       if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
       await replaceEntries([...entries, entry]);
       setStatus("Imported URI from clipboard", "success");
@@ -697,7 +782,7 @@ function bindEvents() {
     try {
       const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
       const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
-      entries = decrypted;
+      entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
       currentPassphrase = normalizePassphrase(unlockPassphraseInput.value);
       unlockPassphraseInput.value = "";
       setLocked(false);
@@ -708,6 +793,18 @@ function bindEvents() {
     } catch (error) {
       reportError("Extension unlock failed", error);
       setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data"), "error");
+    }
+  });
+  cancelEditBtn?.addEventListener("click", () => {
+    editEntryDialog.close("cancel");
+  });
+  saveEditBtn?.addEventListener("click", async () => {
+    try {
+      await saveEditedEntry();
+      editEntryDialog.close("accept");
+      setStatus("Entry updated", "success");
+    } catch (error) {
+      setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
     }
   });
 }

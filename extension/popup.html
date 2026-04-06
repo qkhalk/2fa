@@ -53,6 +53,7 @@
         <input id="search" type="search" placeholder="Search issuer or account">
         <select id="sort-select" aria-label="Sort entries">
           <option value="alpha">A-Z</option>
+          <option value="custom">Manual</option>
           <option value="recent">Newest</option>
           <option value="period">Fastest timer</option>
         </select>
@@ -109,6 +110,9 @@
 
       <div class="entry-code-row">
         <p class="code"></p>
+        <button class="ghost-btn edit" type="button">Edit</button>
+        <button class="ghost-btn move-up" type="button">Up</button>
+        <button class="ghost-btn move-down" type="button">Down</button>
         <button class="ghost-btn copy" type="button">Copy</button>
       </div>
 
@@ -123,5 +127,27 @@
   </template>
 
   <script type="module" src="popup.bundle.js"></script>
+
+  <dialog id="edit-entry-dialog" class="panel hidden-dialog">
+    <div class="section-head">
+      <h2>Edit Entry</h2>
+    </div>
+    <input id="edit-entry-id" type="hidden">
+    <input id="edit-label" type="text" placeholder="Label">
+    <input id="edit-secret" type="text" placeholder="Base32 secret">
+    <input id="edit-tags" type="text" placeholder="Tags">
+    <div class="row two-up">
+      <select id="edit-digits">
+        <option value="6">6 digits</option>
+        <option value="8">8 digits</option>
+      </select>
+      <input id="edit-period" type="number" min="15" max="120">
+    </div>
+    <p id="edit-status" class="status" aria-live="polite"></p>
+    <div class="row two-up">
+      <button id="cancel-edit" class="ghost-btn" type="button">Cancel</button>
+      <button id="save-edit" class="primary-btn" type="button">Save</button>
+    </div>
+  </dialog>
 </body>
 </html>
