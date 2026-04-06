@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build distributables
+        run: npm run build
+
+      - name: Archive browser app bundle
+        run: tar -czf otp-vault-web.tgz index.html styles.css app.js app.bundle.js lib sw.js manifest.webmanifest icon.svg icons
+
+      - name: Archive extension bundle
+        run: tar -czf otp-vault-extension.tgz extension
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: otp-vault-release-bundles
+          path: |
+            otp-vault-web.tgz
+            otp-vault-extension.tgz

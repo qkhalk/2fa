@@ -985,12 +985,27 @@ function renderImportPreview() {
   importPreviewTitle.textContent = `Review ${importPreviewState.candidates.length} candidate${importPreviewState.candidates.length === 1 ? "" : "s"}`;
   importPreviewStatus.textContent = `${importPreviewState.sourceLabel}: only valid, non-duplicate entries are shown below.`;
   importPreviewList.innerHTML = "";
-  for (const entry of importPreviewState.candidates) {
+  importPreviewState.candidates.forEach((entry, index) => {
     const row = document.createElement("article");
     row.className = "preview-item";
-    row.innerHTML = `<strong>${entry.label}</strong><p>${entry.digits} digits \u2022 ${entry.period}s \u2022 ${(entry.tags || []).join(", ") || "No tags yet"}</p>`;
+    row.dataset.index = String(index);
+    row.innerHTML = `
+      <label class="toggle-row">
+        <input type="checkbox" class="preview-include" checked>
+        <span>Import this entry</span>
+      </label>
+      <label>
+        <span>Label</span>
+        <input type="text" class="preview-label" value="${entry.label.replace(/"/g, "&quot;")}">
+      </label>
+      <label>
+        <span>Tags</span>
+        <input type="text" class="preview-tags" value="${(entry.tags || []).join(", ")}" placeholder="project, hardware-key">
+      </label>
+      <p>${entry.digits} digits \u2022 ${entry.period}s</p>
+    `;
     importPreviewList.appendChild(row);
-  }
+  });
 }
 function openImportPreview(candidates, sourceLabel) {
   importPreviewState = { candidates, sourceLabel };
@@ -1001,10 +1016,23 @@ function openImportPreview(candidates, sourceLabel) {
 async function commitImportPreview() {
   if (!importPreviewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
-  const enriched = importPreviewState.candidates.map((entry) => ({
-    ...entry,
-    tags: normalizeTags([...entry.tags || [], ...extraTags])
-  }));
+  const rows = [...importPreviewList.querySelectorAll(".preview-item")];
+  const enriched = rows.flatMap((row) => {
+    const include = row.querySelector(".preview-include");
+    if (!include?.checked) return [];
+    const index = Number(row.dataset.index);
+    const baseEntry = importPreviewState.candidates[index];
+    return [{
+      ...baseEntry,
+      label: row.querySelector(".preview-label")?.value.trim() || baseEntry.label,
+      tags: normalizeTags([
+        ...baseEntry.tags || [],
+        ...normalizeTags(row.querySelector(".preview-tags")?.value),
+        ...extraTags
+      ])
+    }];
+  });
+  if (enriched.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...enriched]);
   setImportStatus(`${importPreviewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
 }

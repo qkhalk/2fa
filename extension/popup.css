@@ -214,6 +214,11 @@ select:focus {
   margin-top: 0;
 }
 
+.toolbar select {
+  margin-top: 0;
+  width: 112px;
+}
+
 .status {
   min-height: 18px;
   margin-top: 8px;
@@ -316,6 +321,21 @@ select:focus {
   text-overflow: ellipsis;
 }
 
+.tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(49, 208, 170, 0.25);
+  color: #c8fff0;
+  font-size: 11px;
+}
+
 .entry-code-row {
   margin-top: 10px;
   justify-content: space-between;
@@ -358,6 +378,32 @@ select:focus {
   border-radius: 16px;
   color: var(--muted);
   background: rgba(17, 27, 48, 0.55);
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.history-item {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(156, 176, 214, 0.14);
+}
+
+.history-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.history-item strong {
+  display: block;
+  font-size: 12px;
+}
+
+.history-item span {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .collapsed #entry-form {

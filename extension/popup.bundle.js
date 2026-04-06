@@ -332,10 +332,12 @@ var UI_KEY = "otp_extension_ui_v1";
 var form = document.getElementById("entry-form");
 var labelInput = document.getElementById("label");
 var secretInput = document.getElementById("secret");
+var tagsInput = document.getElementById("tags");
 var digitsInput = document.getElementById("digits");
 var periodInput = document.getElementById("period");
 var qrFileInput = document.getElementById("qr-file");
 var searchInput = document.getElementById("search");
+var sortSelect = document.getElementById("sort-select");
 var pasteUriBtn = document.getElementById("paste-uri");
 var toggleFormBtn = document.getElementById("toggle-form");
 var lockBtn = document.getElementById("lock-btn");
@@ -353,17 +355,20 @@ var passphraseFields = document.getElementById("passphrase-fields");
 var passphraseInput = document.getElementById("passphrase");
 var passphraseConfirmInput = document.getElementById("passphrase-confirm");
 var saveSecurityBtn = document.getElementById("save-security");
+var copyHistoryRoot = document.getElementById("copy-history");
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var collapsed = false;
-var settings = { encrypt: false };
+var settings = { encrypt: false, sortBy: "alpha" };
 var currentPassphrase = "";
+var copyHistory = [];
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
   settings = { encrypt: false, ...stored[SETTINGS_KEY] || {} };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
+  sortSelect.value = settings.sortBy || "alpha";
   passphraseFields.classList.toggle("hidden", !settings.encrypt);
   applyUiState();
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
@@ -374,6 +379,7 @@ async function initialize() {
   }
   bindEvents();
   renderEntries();
+  renderCopyHistory();
   tick();
   setInterval(tick, 1e3);
 }
@@ -406,7 +412,11 @@ function setLocked(locked) {
 }
 function filteredEntries() {
   const query = (searchInput.value || "").trim().toLowerCase();
-  return [...entries].sort((a, b) => a.label.localeCompare(b.label, void 0, { sensitivity: "base" })).filter((entry) => entry.label.toLowerCase().includes(query));
+  return [...entries].sort((a, b) => {
+    if (settings.sortBy === "recent") return b.createdAt - a.createdAt;
+    if (settings.sortBy === "period") return a.period - b.period || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+    return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+  }).filter((entry) => [entry.label, ...entry.tags || []].join(" ").toLowerCase().includes(query));
 }
 function refreshEntryNode(node, entry) {
   const parts = parseLabelParts(entry.label);
@@ -414,6 +424,32 @@ function refreshEntryNode(node, entry) {
   node.querySelector(".issuer").textContent = parts.issuer;
   node.querySelector(".account").textContent = parts.account;
   node.querySelector(".meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+  const tagRoot = node.querySelector(".tags");
+  if (tagRoot) {
+    tagRoot.innerHTML = "";
+    for (const tag of entry.tags || []) {
+      const chip = document.createElement("span");
+      chip.className = "tag";
+      chip.textContent = tag;
+      tagRoot.appendChild(chip);
+    }
+  }
+}
+function addCopyHistory(label, code) {
+  copyHistory = [{
+    label,
+    code: formatCode(code),
+    at: (/* @__PURE__ */ new Date()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  }, ...copyHistory.filter((item) => item.label !== label)].slice(0, 5);
+  renderCopyHistory();
+}
+function renderCopyHistory() {
+  if (!copyHistoryRoot) return;
+  if (copyHistory.length === 0) {
+    copyHistoryRoot.innerHTML = '<div class="empty-state">Copied OTPs will appear here.</div>';
+    return;
+  }
+  copyHistoryRoot.innerHTML = copyHistory.map((item) => `<div class="history-item"><strong>${item.label}</strong><span>${item.code} \u2022 ${item.at}</span></div>`).join("");
 }
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
@@ -423,6 +459,7 @@ function createEntryNode(entry) {
       const otp = node.dataset.otp;
       if (!otp) return;
       await navigator.clipboard.writeText(otp);
+      addCopyHistory(entry.label, otp);
       setStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
     } catch (error) {
       reportError("Extension copy failed", error);
@@ -558,10 +595,12 @@ function bindEvents() {
       await addEntry({
         label: labelInput.value,
         secret: secretInput.value,
+        tags: normalizeTags(tagsInput.value),
         digits: Number(digitsInput.value),
         period: Number(periodInput.value)
       });
       form.reset();
+      tagsInput.value = "";
       digitsInput.value = "6";
       periodInput.value = "30";
       setStatus("Entry added", "success");
@@ -600,6 +639,12 @@ function bindEvents() {
     }
   });
   searchInput.addEventListener("input", () => {
+    renderEntries();
+    tick();
+  });
+  sortSelect.addEventListener("change", async () => {
+    settings.sortBy = sortSelect.value;
+    await persistSettings();
     renderEntries();
     tick();
   });

@@ -57,6 +57,7 @@ Suggested flow:
 2. Run `npm test`
 3. Use Conventional Commits
 4. Open a PR against the upstream repository
+5. Use the PR template and include screenshots for UI changes
 
 ## Notes
 
