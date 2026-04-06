@@ -1,3 +1,25 @@
+import {
+  extractOtpAuthUri,
+  formatCode,
+  generateTotp,
+  getIssuerInitials,
+  hasDuplicateEntry,
+  normalizeEntries,
+  normalizeEntry,
+  parseLabelParts,
+  parseOtpAuthUri,
+  reportError,
+  toUserMessage,
+} from "./lib/otp.js";
+import {
+  createEncryptedBackup,
+  createPlainBackup,
+  decryptVaultEntries,
+  encryptEntries,
+  normalizePassphrase,
+  parseBackupFile,
+} from "./lib/vault.js";
+
 const STORAGE_KEY = "personal_otp_vault_entries_v2";
 const SETTINGS_KEY = "personal_otp_vault_settings_v2";
 const WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
@@ -59,6 +81,7 @@ let currentPassphrase = "";
 let cameraStream = null;
 let cameraScanTimer = null;
 let deferredInstallPrompt = null;
+let cameraDetection = { uri: "", hits: 0 };
 
 initialize();
 
@@ -78,7 +101,8 @@ function loadSettings() {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...defaultSettings };
     return { ...defaultSettings, ...JSON.parse(raw) };
-  } catch {
+  } catch (error) {
+    reportError("Failed to load settings", error);
     return { ...defaultSettings };
   }
 }
@@ -93,7 +117,7 @@ function syncSettingsUI() {
   unlockOnLoadToggle.checked = settings.unlockOnLoad;
   blurCodesToggle.checked = settings.blurCodes;
   clearClipboardToggle.checked = settings.clearClipboard;
-  encryptionFields.classList.toggle("hidden", !encryptToggle.checked);
+  encryptionFields.classList.toggle("hidden", !settings.encrypt);
 }
 
 function applyVisualSettings() {
@@ -143,7 +167,6 @@ function loadVaultOnStartup() {
   }
 
   entries = loadPlainEntries();
-  ensureEntryShape();
   setLocked(false);
 }
 
@@ -151,8 +174,7 @@ function setLocked(locked) {
   unlockPanel.classList.toggle("hidden", !locked);
   lockAppBtn.disabled = locked;
   form.querySelectorAll("input, button, select").forEach((el) => {
-    if (el.id === "unlock-passphrase") return;
-    if (el.id === "unlock-btn") return;
+    if (el.id === "unlock-passphrase" || el.id === "unlock-btn") return;
     el.disabled = locked;
   });
   searchInput.disabled = locked;
@@ -162,9 +184,9 @@ function loadPlainEntries() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
+    return normalizeEntries(JSON.parse(raw));
+  } catch (error) {
+    reportError("Failed to load plain entries", error);
     return [];
   }
 }
@@ -178,67 +200,6 @@ function clearPersistedEntries() {
   localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 
-function sanitizeBase32(value) {
-  return value.toUpperCase().replace(/\s+/g, "").replace(/=+$/g, "");
-}
-
-function generateEntryId() {
-  return `entry_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function normalizeEntry(entry) {
-  const label = (entry.label || "").trim() || createFallbackLabel(entry.secret || "");
-  return {
-    id: entry.id || generateEntryId(),
-    label,
-    secret: sanitizeBase32(entry.secret || ""),
-    digits: entry.digits === 8 ? 8 : 6,
-    period: Math.max(15, Math.min(120, Number(entry.period) || 30)),
-    pinned: Boolean(entry.pinned),
-  };
-}
-
-function ensureEntryShape() {
-  entries = entries.map(normalizeEntry);
-}
-
-function createFallbackLabel(secret) {
-  const clean = sanitizeBase32(secret);
-  if (clean.length <= 8) return `Secret ${clean || "entry"}`;
-  return `Secret ${clean.slice(0, 4)}...${clean.slice(-4)}`;
-}
-
-function parseLabelParts(label) {
-  const clean = (label || "").trim();
-  if (!clean) return { issuer: "Unknown", account: "No account label" };
-
-  if (clean.includes(":")) {
-    const [issuer, ...rest] = clean.split(":");
-    return {
-      issuer: issuer.trim() || clean,
-      account: rest.join(":").trim() || "No account label",
-    };
-  }
-
-  if (clean.includes(" - ")) {
-    const [issuer, ...rest] = clean.split(" - ");
-    return {
-      issuer: issuer.trim() || clean,
-      account: rest.join(" - ").trim() || "No account label",
-    };
-  }
-
-  return { issuer: clean, account: "No account label" };
-}
-
-function getIssuerInitials(label) {
-  const issuer = parseLabelParts(label).issuer;
-  const parts = issuer.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "OT";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
 function sortedEntries() {
   return [...entries].sort((a, b) => {
     if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -247,10 +208,10 @@ function sortedEntries() {
 }
 
 function getVisibleEntries() {
-  const q = (searchInput.value || "").trim().toLowerCase();
+  const query = (searchInput.value || "").trim().toLowerCase();
   const ordered = sortedEntries();
-  if (!q) return ordered;
-  return ordered.filter((entry) => entry.label.toLowerCase().includes(q));
+  if (!query) return ordered;
+  return ordered.filter((entry) => entry.label.toLowerCase().includes(query));
 }
 
 function showEmptyState(message) {
@@ -271,26 +232,28 @@ function createEntryNode(entry) {
   const revealBtn = node.querySelector(".reveal");
   const pinBtn = node.querySelector(".pin");
   const removeBtn = node.querySelector(".remove");
-  const parts = parseLabelParts(entry.label);
 
   avatar.textContent = getIssuerInitials(entry.label);
-  label.textContent = parts.issuer;
-  account.textContent = parts.account;
-  meta.textContent = `${entry.digits} digits • ${entry.period}s`;
+  refreshEntryMetadata(node, entry);
 
   copyBtn.onclick = async () => {
-    const latestCode = node.dataset.otp;
-    if (!latestCode) return;
-    await navigator.clipboard.writeText(latestCode);
-    copyBtn.textContent = "Copied";
-    if (settings.clearClipboard) {
+    try {
+      const latestCode = node.dataset.otp;
+      if (!latestCode) return;
+      await navigator.clipboard.writeText(latestCode);
+      copyBtn.textContent = "Copied";
+      if (settings.clearClipboard) {
+        setTimeout(() => {
+          navigator.clipboard.writeText("").catch((error) => reportError("Clipboard clear failed", error));
+        }, 30000);
+      }
       setTimeout(() => {
-        navigator.clipboard.writeText("").catch(() => {});
-      }, 30000);
+        copyBtn.textContent = "Copy";
+      }, 1000);
+    } catch (error) {
+      reportError("Copy failed", error);
+      setImportStatus(toUserMessage(error, "Could not copy OTP to clipboard"), "error");
     }
-    setTimeout(() => {
-      copyBtn.textContent = "Copy";
-    }, 1000);
   };
 
   revealBtn.onclick = () => {
@@ -298,27 +261,41 @@ function createEntryNode(entry) {
     revealBtn.textContent = node.classList.contains("revealed") ? "Hide" : "Reveal";
   };
 
-  pinBtn.onclick = () => {
-    const target = entries.find((item) => item.id === entry.id);
-    if (!target) return;
-    target.pinned = !target.pinned;
-    persistEntries().catch(() => {});
-    renderEntries();
-    tick();
+  pinBtn.onclick = async () => {
+    try {
+      await replaceEntries(entries.map((item) => (
+        item.id === entry.id ? { ...item, pinned: !item.pinned } : item
+      )));
+      setImportStatus("Entry order updated", "success");
+    } catch (error) {
+      reportError("Pin toggle failed", error);
+      setImportStatus(toUserMessage(error, "Could not update entry order"), "error");
+    }
   };
 
-  removeBtn.onclick = () => {
-    entries = entries.filter((item) => item.id !== entry.id);
-    persistEntries().catch(() => {});
-    renderEntries();
-    tick();
+  removeBtn.onclick = async () => {
+    try {
+      const nextEntries = entries.filter((item) => item.id !== entry.id);
+      await replaceEntries(nextEntries);
+      setImportStatus("Entry removed", "success");
+    } catch (error) {
+      reportError("Entry removal failed", error);
+      setImportStatus(toUserMessage(error, "Could not remove entry"), "error");
+    }
   };
 
   return node;
 }
 
+function refreshEntryMetadata(node, entry) {
+  const parts = parseLabelParts(entry.label);
+  node.querySelector(".entry-label").textContent = parts.issuer;
+  node.querySelector(".entry-account").textContent = parts.account;
+  node.querySelector(".entry-meta").textContent = `${entry.digits} digits • ${entry.period}s`;
+}
+
 function renderEntries() {
-  if (unlockPanel && !unlockPanel.classList.contains("hidden") && settings.encrypt) {
+  if (!unlockPanel.classList.contains("hidden") && settings.encrypt) {
     showEmptyState("Vault is locked. Unlock to view your codes.");
     return;
   }
@@ -337,15 +314,14 @@ function renderEntries() {
 
   entriesRoot.innerHTML = "";
   const fragment = document.createDocumentFragment();
-  const activeIds = new Set();
 
   for (const entry of visibleEntries) {
-    activeIds.add(entry.id);
     let node = entryNodes.get(entry.id);
     if (!node) {
       node = createEntryNode(entry);
       entryNodes.set(entry.id, node);
     }
+    refreshEntryMetadata(node, entry);
     node.classList.toggle("pinned", entry.pinned);
     node.querySelector(".pin").textContent = entry.pinned ? "Unpin" : "Pin";
     fragment.appendChild(node);
@@ -358,71 +334,17 @@ function renderEntries() {
   entriesRoot.appendChild(fragment);
 }
 
-function base32ToBytes(base32) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const clean = sanitizeBase32(base32);
-  if (!clean) return new Uint8Array();
-
-  let bits = "";
-  for (const char of clean) {
-    const idx = alphabet.indexOf(char);
-    if (idx === -1) throw new Error("Secret contains invalid Base32 characters");
-    bits += idx.toString(2).padStart(5, "0");
-  }
-
-  const bytes = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) {
-    bytes.push(parseInt(bits.slice(i, i + 8), 2));
-  }
-  return new Uint8Array(bytes);
-}
-
-function toCounterBytes(counter) {
-  const bytes = new Uint8Array(8);
-  let temp = BigInt(counter);
-  for (let i = 7; i >= 0; i -= 1) {
-    bytes[i] = Number(temp & 0xffn);
-    temp >>= 8n;
-  }
-  return bytes;
-}
-
-async function hmacSha1(keyBytes, msgBytes) {
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
-  return new Uint8Array(sig);
-}
-
-async function generateTotp(secret, digits, period, now) {
-  const counter = Math.floor(now / period);
-  const secretBytes = base32ToBytes(secret);
-  const digest = await hmacSha1(secretBytes, toCounterBytes(counter));
-  const offset = digest[digest.length - 1] & 0x0f;
-  const binary = ((digest[offset] & 0x7f) << 24)
-    | (digest[offset + 1] << 16)
-    | (digest[offset + 2] << 8)
-    | digest[offset + 3];
-  return (binary % (10 ** digits)).toString().padStart(digits, "0");
-}
-
-function formatCode(code) {
-  if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
-  if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
-  return code;
-}
-
 async function updateEntryNode(entry, now) {
   const node = entryNodes.get(entry.id);
   if (!node) return;
+
   const code = node.querySelector(".entry-code");
   const seconds = node.querySelector(".entry-seconds");
   const bar = node.querySelector(".entry-bar");
   const copyBtn = node.querySelector(".copy");
-
   const remaining = entry.period - (now % entry.period);
-  const ratio = remaining / entry.period;
   seconds.textContent = `${remaining}s left`;
-  bar.style.transform = `scaleX(${ratio})`;
+  bar.style.transform = `scaleX(${remaining / entry.period})`;
   node.classList.toggle("urgent", remaining <= 10);
 
   try {
@@ -430,7 +352,8 @@ async function updateEntryNode(entry, now) {
     code.textContent = formatCode(otp);
     node.dataset.otp = otp;
     copyBtn.disabled = false;
-  } catch {
+  } catch (error) {
+    reportError("OTP generation failed", error);
     code.textContent = "Invalid secret";
     node.dataset.otp = "";
     copyBtn.disabled = true;
@@ -456,41 +379,24 @@ async function tick() {
   await updateAllEntries(now);
 }
 
-function parseOtpAuthUri(uri) {
-  if (!uri.startsWith("otpauth://")) throw new Error("URI must start with otpauth://");
-  const parsed = new URL(uri);
-  if (parsed.hostname !== "totp") throw new Error("Only TOTP URIs are supported");
-  return {
-    label: decodeURIComponent(parsed.pathname.replace(/^\//, "")) || "Imported Account",
-    secret: parsed.searchParams.get("secret") || "",
-    digits: Number(parsed.searchParams.get("digits") || 6) === 8 ? 8 : 6,
-    period: Number(parsed.searchParams.get("period") || 30),
-  };
+async function saveEncryptedEntries(payloadEntries, passphrase) {
+  const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
+  localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(encryptedPayload));
+  return encryptedPayload;
 }
 
-function normalizeUriCandidate(raw) {
-  return (raw || "").trim().replace(/[)\],.;]+$/, "");
-}
+async function decryptStoredEntries(passphrase) {
+  const raw = localStorage.getItem(ENCRYPTED_VAULT_KEY);
+  if (!raw) return [];
 
-function findOtpAuthUri(rawText) {
-  const text = normalizeUriCandidate(rawText);
-  if (!text) return "";
-  if (text.startsWith("otpauth://")) return text;
-  const match = text.match(/otpauth:\/\/[^\s"']+/i);
-  if (match) return normalizeUriCandidate(match[0]);
+  let payload;
   try {
-    const decoded = decodeURIComponent(text);
-    if (decoded.startsWith("otpauth://")) return normalizeUriCandidate(decoded);
-    const decodedMatch = decoded.match(/otpauth:\/\/[^\s"']+/i);
-    return decodedMatch ? normalizeUriCandidate(decodedMatch[0]) : "";
-  } catch {
-    return "";
+    payload = JSON.parse(raw);
+  } catch (error) {
+    throw new Error("Encrypted data is unreadable", { cause: error });
   }
-}
 
-function hasDuplicateEntry(secret, digits, period) {
-  const cleanSecret = sanitizeBase32(secret);
-  return entries.some((entry) => entry.secret === cleanSecret && entry.digits === digits && entry.period === period);
+  return decryptVaultEntries(payload, passphrase);
 }
 
 async function persistEntries() {
@@ -500,7 +406,9 @@ async function persistEntries() {
   }
 
   if (settings.encrypt) {
-    if (!currentPassphrase) throw new Error("Unlock or set a passphrase before saving encrypted entries");
+    if (!currentPassphrase) {
+      throw new Error("Unlock or set a passphrase before saving encrypted entries");
+    }
     await saveEncryptedEntries(entries, currentPassphrase);
     localStorage.removeItem(STORAGE_KEY);
     return;
@@ -510,25 +418,51 @@ async function persistEntries() {
   localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 
-function addEntry({ label, secret, digits, period }) {
-  const normalized = normalizeEntry({ label, secret, digits, period, pinned: false });
-  if (hasDuplicateEntry(normalized.secret, normalized.digits, normalized.period)) {
-    throw new Error("This account already exists");
+async function replaceEntries(nextEntries) {
+  const previousEntries = entries;
+  entries = normalizeEntries(nextEntries);
+
+  try {
+    await persistEntries();
+  } catch (error) {
+    entries = previousEntries;
+    renderEntries();
+    await tick();
+    throw error;
   }
-  entries.push(normalized);
+
+  renderEntries();
+  await tick();
 }
 
-function importOtpAuthUri(otpUri, sourceLabel = "Import") {
+function buildManualEntry(input) {
+  const entry = normalizeEntry({ ...input, pinned: false });
+  if (hasDuplicateEntry(entries, entry)) {
+    throw new Error("This account already exists");
+  }
+  return entry;
+}
+
+async function addEntry(input) {
+  const entry = buildManualEntry(input);
+  await replaceEntries([...entries, entry]);
+  return entry;
+}
+
+async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
   const parsed = parseOtpAuthUri(otpUri);
-  addEntry(parsed);
-  persistEntries().catch((error) => setImportStatus(error.message || "Could not save imported entry", "error"));
-  renderEntries();
-  tick();
+  if (hasDuplicateEntry(entries, parsed)) {
+    throw new Error("This account already exists");
+  }
+  await replaceEntries([...entries, parsed]);
   setImportStatus(`${sourceLabel}: account imported`, "success");
 }
 
 async function decodeQrFromBlob(blob) {
-  if (typeof jsQR !== "function") throw new Error("QR scanner library failed to load");
+  if (typeof window.jsQR !== "function") {
+    throw new Error("QR scanner library failed to load");
+  }
+
   const bitmap = await createImageBitmap(blob);
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
@@ -537,74 +471,27 @@ async function decodeQrFromBlob(blob) {
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
-  if (!result || !result.data) throw new Error("Could not detect a QR code in that image");
+  const result = window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+  if (!result?.data) {
+    throw new Error("Could not detect a QR code in that image");
+  }
   return result.data;
 }
 
 async function importFromQrBlob(blob, sourceLabel) {
   const qrText = await decodeQrFromBlob(blob);
-  const otpUri = findOtpAuthUri(qrText);
-  if (!otpUri) throw new Error("QR does not contain an otpauth:// URI");
-  importOtpAuthUri(otpUri, sourceLabel);
-}
-
-function bytesToBase64(uint8) {
-  return btoa(String.fromCharCode(...uint8));
-}
-
-function base64ToBytes(base64) {
-  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-}
-
-async function deriveVaultKey(passphrase, salt) {
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(passphrase),
-    "PBKDF2",
-    false,
-    ["deriveKey"]
-  );
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
-    keyMaterial,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function saveEncryptedEntries(payloadEntries, passphrase) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveVaultKey(passphrase, salt);
-  const encoded = new TextEncoder().encode(JSON.stringify(payloadEntries));
-  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-  localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify({
-    salt: bytesToBase64(salt),
-    iv: bytesToBase64(iv),
-    data: bytesToBase64(new Uint8Array(cipher)),
-  }));
-}
-
-async function decryptStoredEntries(passphrase) {
-  const raw = localStorage.getItem(ENCRYPTED_VAULT_KEY);
-  if (!raw) return [];
-  const payload = JSON.parse(raw);
-  const salt = base64ToBytes(payload.salt);
-  const iv = base64ToBytes(payload.iv);
-  const data = base64ToBytes(payload.data);
-  const key = await deriveVaultKey(passphrase, salt);
-  const decoded = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
-  const parsed = JSON.parse(new TextDecoder().decode(decoded));
-  return Array.isArray(parsed) ? parsed.map(normalizeEntry) : [];
+  const otpUri = extractOtpAuthUri(qrText);
+  if (!otpUri) {
+    throw new Error("QR code was detected but does not contain a valid OTP URI");
+  }
+  await importOtpAuthUri(otpUri, sourceLabel);
 }
 
 async function unlockVault(passphrase) {
-  const decrypted = await decryptStoredEntries(passphrase);
-  currentPassphrase = passphrase;
+  const normalizedPassphrase = normalizePassphrase(passphrase);
+  const decrypted = await decryptStoredEntries(normalizedPassphrase);
+  currentPassphrase = normalizedPassphrase;
   entries = decrypted;
-  ensureEntryShape();
   setLocked(false);
   renderEntries();
   await tick();
@@ -630,11 +517,15 @@ async function handleSaveSettings() {
   if (nextSettings.encrypt) {
     const first = vaultPassphraseInput.value.trim();
     const second = vaultPassphraseConfirmInput.value.trim();
-    if (!currentPassphrase && !first) throw new Error("Enter a passphrase to enable encryption");
+
+    if (!currentPassphrase && !first) {
+      throw new Error("Enter a passphrase to enable encryption");
+    }
     if (first || second) {
-      if (first.length < 8) throw new Error("Use a passphrase with at least 8 characters");
-      if (first !== second) throw new Error("Passphrase confirmation does not match");
-      nextPassphrase = first;
+      if (first !== second) {
+        throw new Error("Passphrase confirmation does not match");
+      }
+      nextPassphrase = normalizePassphrase(first);
     }
   } else {
     nextPassphrase = "";
@@ -650,6 +541,8 @@ async function handleSaveSettings() {
     clearPersistedEntries();
     setLocked(false);
     setSettingsStatus("Entries are now session-only", "success");
+    vaultPassphraseInput.value = "";
+    vaultPassphraseConfirmInput.value = "";
     return;
   }
 
@@ -672,72 +565,95 @@ function downloadJson(filename, data) {
 
 async function exportBackup() {
   if (settings.encrypt) {
-    if (!currentPassphrase) throw new Error("Unlock the vault before exporting encrypted backup");
-    await saveEncryptedEntries(entries, currentPassphrase);
-    const encrypted = JSON.parse(localStorage.getItem(ENCRYPTED_VAULT_KEY) || "{}");
-    downloadJson("otp-vault-backup.json", {
-      version: 1,
-      encrypted: true,
-      createdAt: new Date().toISOString(),
-      vault: encrypted,
-    });
+    if (!currentPassphrase) {
+      throw new Error("Unlock the vault before exporting encrypted backup");
+    }
+    const encryptedPayload = await encryptEntries(entries, currentPassphrase);
+    downloadJson("otp-vault-backup.json", createEncryptedBackup(encryptedPayload));
     return;
   }
 
-  downloadJson("otp-vault-backup.json", {
-    version: 1,
-    encrypted: false,
-    createdAt: new Date().toISOString(),
-    entries,
-  });
+  downloadJson("otp-vault-backup.json", createPlainBackup(entries));
 }
 
 async function importBackupFile(file) {
   const text = await file.text();
-  const backup = JSON.parse(text);
+
+  let backup;
+  try {
+    backup = parseBackupFile(JSON.parse(text));
+  } catch (error) {
+    throw new Error(toUserMessage(error, "Backup file is invalid"));
+  }
+
   if (backup.encrypted) {
     const passphrase = window.prompt("Backup is encrypted. Enter the backup passphrase:");
     if (!passphrase) throw new Error("Backup import cancelled");
-    localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(backup.vault));
-    const decrypted = await decryptStoredEntries(passphrase);
-    currentPassphrase = settings.encrypt ? passphrase : currentPassphrase;
-    entries = decrypted;
-  } else {
-    entries = Array.isArray(backup.entries) ? backup.entries.map(normalizeEntry) : [];
+    const decrypted = await decryptVaultEntries(backup.vault, passphrase);
+    if (settings.encrypt) {
+      currentPassphrase = normalizePassphrase(passphrase);
+    }
+    await replaceEntries(decrypted);
+    return;
   }
 
-  ensureEntryShape();
-  await persistEntries().catch(() => {});
-  renderEntries();
-  await tick();
+  await replaceEntries(backup.entries);
+}
+
+function registerCameraDetection(uri) {
+  if (cameraDetection.uri === uri) {
+    cameraDetection.hits += 1;
+  } else {
+    cameraDetection = { uri, hits: 1 };
+  }
+  return cameraDetection.hits >= 2;
 }
 
 async function startCameraScan() {
   if (cameraStream) return;
+  cameraDetection = { uri: "", hits: 0 };
   cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
   cameraPreview.srcObject = cameraStream;
   await cameraPreview.play();
+
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
   cameraScanTimer = setInterval(async () => {
-    if (!cameraPreview.videoWidth || !cameraPreview.videoHeight) return;
+    if (!cameraPreview.videoWidth || !cameraPreview.videoHeight || typeof window.jsQR !== "function") return;
+
     canvas.width = cameraPreview.videoWidth;
     canvas.height = cameraPreview.videoHeight;
     ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const result = typeof jsQR === "function" ? jsQR(imageData.data, imageData.width, imageData.height) : null;
-    if (!result || !result.data) return;
-    const otpUri = findOtpAuthUri(result.data);
-    if (!otpUri) return;
-    importOtpAuthUri(otpUri, "Camera");
-    stopCameraScan();
+    const result = window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+    const otpUri = extractOtpAuthUri(result?.data || "");
+    if (!otpUri) {
+      cameraDetection = { uri: "", hits: 0 };
+      return;
+    }
+
+    if (!registerCameraDetection(otpUri)) {
+      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "success");
+      return;
+    }
+
+    try {
+      await importOtpAuthUri(otpUri, "Camera");
+      stopCameraScan();
+    } catch (error) {
+      reportError("Camera import failed", error);
+      setImportStatus(toUserMessage(error, "Could not import camera scan"), "error");
+      cameraDetection = { uri: "", hits: 0 };
+    }
   }, 900);
 }
 
 function stopCameraScan() {
   if (cameraScanTimer) clearInterval(cameraScanTimer);
   cameraScanTimer = null;
+  cameraDetection = { uri: "", hits: 0 };
+
   if (cameraStream) {
     cameraStream.getTracks().forEach((track) => track.stop());
   }
@@ -753,7 +669,7 @@ function registerPwaSupport() {
   });
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    navigator.serviceWorker.register("./sw.js").catch((error) => reportError("Service worker registration failed", error));
   }
 }
 
@@ -765,44 +681,45 @@ function bindEvents() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      addEntry({
+      await addEntry({
         label: labelInput.value,
         secret: secretInput.value,
         digits: Number(digitsInput.value),
         period: Number(periodInput.value),
       });
-      await persistEntries();
       form.reset();
       digitsInput.value = "6";
       periodInput.value = "30";
       syncSettingsUI();
-      renderEntries();
-      await tick();
       setImportStatus("Entry added", "success");
     } catch (error) {
-      setImportStatus(error.message || "Could not add entry", "error");
+      reportError("Manual entry failed", error);
+      setImportStatus(toUserMessage(error, "Could not add entry"), "error");
     }
   });
 
-  parseUriBtn.addEventListener("click", () => {
+  parseUriBtn.addEventListener("click", async () => {
     try {
-      const otpUri = findOtpAuthUri(uriInput.value);
-      if (!otpUri) throw new Error("No otpauth:// URI found");
-      importOtpAuthUri(otpUri, "URI");
+      const otpUri = extractOtpAuthUri(uriInput.value);
+      if (!otpUri) throw new Error("No valid otpauth:// URI found");
+      await importOtpAuthUri(otpUri, "URI");
       uriInput.value = "";
     } catch (error) {
-      setImportStatus(error.message || "Invalid URI", "error");
+      reportError("URI import failed", error);
+      setImportStatus(toUserMessage(error, "Invalid URI"), "error");
     }
   });
 
   qrFileInput.addEventListener("change", async () => {
     const [file] = qrFileInput.files || [];
     if (!file) return;
+
     setImportStatus("Reading QR file...");
     try {
       await importFromQrBlob(file, "QR file");
     } catch (error) {
-      setImportStatus(error.message || "Failed to import QR file", "error");
+      reportError("QR file import failed", error);
+      setImportStatus(toUserMessage(error, "Failed to import QR file"), "error");
     } finally {
       qrFileInput.value = "";
     }
@@ -814,13 +731,15 @@ function bindEvents() {
       setImportStatus("Please enter a QR image URL", "error");
       return;
     }
+
     setImportStatus("Fetching QR image URL...");
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error("Could not download QR image URL");
       await importFromQrBlob(await response.blob(), "QR URL");
     } catch (error) {
-      setImportStatus(error.message || "Failed to import from URL", "error");
+      reportError("QR URL import failed", error);
+      setImportStatus(toUserMessage(error, "Failed to import from URL"), "error");
     }
   });
 
@@ -836,12 +755,14 @@ function bindEvents() {
           return;
         }
       }
+
       const text = await navigator.clipboard.readText();
-      const otpUri = findOtpAuthUri(text);
-      if (!otpUri) throw new Error("Clipboard has no otpauth:// URI or QR image");
-      importOtpAuthUri(otpUri, "Clipboard");
+      const otpUri = extractOtpAuthUri(text);
+      if (!otpUri) throw new Error("Clipboard does not contain a valid OTP URI or QR image");
+      await importOtpAuthUri(otpUri, "Clipboard");
     } catch (error) {
-      setImportStatus(error.message || "Failed to import from clipboard", "error");
+      reportError("Clipboard import failed", error);
+      setImportStatus(toUserMessage(error, "Failed to import from clipboard"), "error");
     }
   });
 
@@ -851,7 +772,8 @@ function bindEvents() {
       await startCameraScan();
       setImportStatus("Camera ready. Hold a QR code in front of it.", "success");
     } catch (error) {
-      setImportStatus(error.message || "Could not start camera", "error");
+      reportError("Camera start failed", error);
+      setImportStatus(toUserMessage(error, "Could not start camera"), "error");
     }
   });
 
@@ -861,11 +783,13 @@ function bindEvents() {
   });
 
   clearAllBtn.addEventListener("click", async () => {
-    entries = [];
-    await persistEntries().catch(() => {});
-    renderEntries();
-    await tick();
-    setImportStatus("All entries cleared");
+    try {
+      await replaceEntries([]);
+      setImportStatus("All entries cleared", "success");
+    } catch (error) {
+      reportError("Clear all failed", error);
+      setImportStatus(toUserMessage(error, "Could not clear entries"), "error");
+    }
   });
 
   searchInput.addEventListener("input", () => {
@@ -877,7 +801,8 @@ function bindEvents() {
     try {
       await handleSaveSettings();
     } catch (error) {
-      setSettingsStatus(error.message || "Could not save settings", "error");
+      reportError("Save settings failed", error);
+      setSettingsStatus(toUserMessage(error, "Could not save settings"), "error");
     }
   });
 
@@ -886,18 +811,21 @@ function bindEvents() {
       await exportBackup();
       setSettingsStatus("Backup exported", "success");
     } catch (error) {
-      setSettingsStatus(error.message || "Could not export backup", "error");
+      reportError("Backup export failed", error);
+      setSettingsStatus(toUserMessage(error, "Could not export backup"), "error");
     }
   });
 
   importBackupInput.addEventListener("change", async () => {
     const [file] = importBackupInput.files || [];
     if (!file) return;
+
     try {
       await importBackupFile(file);
       setSettingsStatus("Backup imported", "success");
     } catch (error) {
-      setSettingsStatus(error.message || "Could not import backup", "error");
+      reportError("Backup import failed", error);
+      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
     } finally {
       importBackupInput.value = "";
     }
@@ -918,8 +846,9 @@ function bindEvents() {
       await unlockVault(unlockPassphraseInput.value);
       unlockPassphraseInput.value = "";
       setUnlockStatus("Vault unlocked", "success");
-    } catch {
-      setUnlockStatus("Incorrect passphrase or unreadable encrypted vault", "error");
+    } catch (error) {
+      reportError("Vault unlock failed", error);
+      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted vault"), "error");
     }
   });
 
@@ -936,7 +865,8 @@ function bindEvents() {
     if (privacyDialog.returnValue === "accept") {
       markPersistWarningSeen();
       handleSaveSettings().catch((error) => {
-        setSettingsStatus(error.message || "Could not save settings", "error");
+        reportError("Save settings after privacy dialog failed", error);
+        setSettingsStatus(toUserMessage(error, "Could not save settings"), "error");
       });
     } else {
       persistToggle.checked = settings.persist;
@@ -945,6 +875,7 @@ function bindEvents() {
 }
 
 window.otpVaultDebug = {
+  extractOtpAuthUri,
   parseLabelParts,
-  findOtpAuthUri,
+  parseOtpAuthUri,
 };

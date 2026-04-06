@@ -1,0 +1,154 @@
+import { readFile } from "node:fs/promises";
+
+import { expect, test } from "@playwright/test";
+
+const FIXED_NOW = 1_700_000_000_000;
+const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
+const SECONDARY_SECRET = "NB2W45DFOIZA====";
+const PASSPHRASE = "correct horse battery";
+
+async function loadApp(page) {
+  await page.addInitScript(({ fixedNow }) => {
+    const RealDate = Date;
+
+    class MockDate extends RealDate {
+      constructor(...args) {
+        super(...(args.length === 0 ? [fixedNow] : args));
+      }
+
+      static now() {
+        return fixedNow;
+      }
+    }
+
+    Object.setPrototypeOf(MockDate, RealDate);
+    window.Date = MockDate;
+  }, { fixedNow: FIXED_NOW });
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+}
+
+async function addEntry(page, { label, secret, digits = "6", period = "30" }) {
+  await page.getByLabel("Base32 Secret").fill(secret);
+  await page.getByLabel("Label (optional)").fill(label);
+  await page.getByLabel("Digits").selectOption(digits);
+  await page.getByLabel("Period (seconds)").fill(period);
+  await page.getByRole("button", { name: "Save Entry" }).click();
+}
+
+async function acceptPersistWarning(page) {
+  await expect(page.locator("#privacy-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "I Understand" }).click();
+}
+
+test("adds entries manually and renders active OTP codes", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+
+  await expect(page.locator("#import-status")).toHaveText("Entry added");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("GitHub");
+  await expect(page.locator(".entry-account")).toHaveText("user@example.com");
+  await expect(page.locator(".entry-code")).toHaveText(/\d{3} \d{3}/);
+});
+
+test("rejects invalid manual input and invalid URI false positives", async ({ page }) => {
+  await loadApp(page);
+
+  await addEntry(page, { label: "Broken", secret: "NOT-BASE32!" });
+  await expect(page.locator("#import-status")).toContainText("Secret contains invalid Base32 characters");
+
+  await page.getByLabel("otpauth:// URI").fill("otpauth://totp/Foo:bar?secret=BAD*&digits=6&period=30");
+  await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
+  await expect(page.locator("#import-status")).toContainText("No valid otpauth:// URI found");
+});
+
+test("imports OTP URIs from surrounding text and supports search, pin, and remove", async ({ page }) => {
+  await loadApp(page);
+
+  await page.getByLabel("otpauth:// URI").fill(
+    "Please import otpauth://totp/Example:user@example.com?secret=JBSWY3DPEHPK3PXP&period=30&digits=6."
+  );
+  await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
+  await addEntry(page, { label: "Zeta:user@example.com", secret: SECONDARY_SECRET });
+
+  await page.locator(".entry").nth(1).getByRole("button", { name: "Pin" }).click();
+  await expect(page.locator(".entry-label").first()).toHaveText("Zeta");
+
+  await page.getByPlaceholder("Search issuer or account").fill("example");
+  await expect(page.locator(".entry")).toHaveCount(2);
+  await page.getByPlaceholder("Search issuer or account").fill("zeta");
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  await page.locator(".entry").first().getByRole("button", { name: "Remove" }).click();
+  await expect(page.locator(".entry")).toHaveCount(0);
+  await expect(page.locator("#entries")).toContainText("No matching entries.");
+});
+
+test("persists encrypted vaults and unlocks after reload", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await page.reload();
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+  await page.locator("#unlock-passphrase").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Unlock Vault" }).click();
+
+  await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
+  await expect(page.locator(".entry")).toHaveCount(1);
+});
+
+test("exports and reimports backups in plain and encrypted modes", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+
+  const plainDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Backup" }).click();
+  const plainDownload = await plainDownloadPromise;
+  const plainBackup = await readFile(await plainDownload.path());
+
+  await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator(".entry")).toHaveCount(0);
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "plain-backup.json",
+    mimeType: "application/json",
+    buffer: plainBackup,
+  });
+  await expect(page.locator("#settings-status")).toContainText("Backup imported");
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+
+  const encryptedDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Backup" }).click();
+  const encryptedDownload = await encryptedDownloadPromise;
+  const encryptedBackup = await readFile(await encryptedDownload.path());
+
+  await page.getByRole("button", { name: "Clear All" }).click();
+  page.once("dialog", (dialog) => dialog.accept(PASSPHRASE));
+  await page.locator("#import-backup").setInputFiles({
+    name: "encrypted-backup.json",
+    mimeType: "application/json",
+    buffer: encryptedBackup,
+  });
+
+  await expect(page.locator("#settings-status")).toContainText("Backup imported");
+  await expect(page.locator(".entry")).toHaveCount(1);
+});
