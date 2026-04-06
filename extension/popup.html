@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal OTP Vault</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <header>
+      <p class="eyebrow">extension</p>
+      <h1>OTP Vault</h1>
+    </header>
+
+    <form id="entry-form" autocomplete="off">
+      <input id="label" type="text" placeholder="GitHub:user@example.com">
+      <input id="secret" type="text" placeholder="Base32 secret" required>
+      <div class="row">
+        <select id="digits">
+          <option value="6">6 digits</option>
+          <option value="8">8 digits</option>
+        </select>
+        <input id="period" type="number" min="15" max="120" value="30">
+      </div>
+      <button type="submit">Add Entry</button>
+    </form>
+
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search">
+      <button id="paste-uri" type="button">Paste URI</button>
+    </div>
+
+    <p id="status"></p>
+    <div id="entries" class="entries"></div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

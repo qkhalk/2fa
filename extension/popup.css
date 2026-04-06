@@ -1,0 +1,98 @@
+body {
+  margin: 0;
+  width: 360px;
+  min-height: 520px;
+  font-family: Arial, sans-serif;
+  background: #0b1220;
+  color: #eef5ff;
+}
+
+.popup-shell {
+  padding: 14px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #31d0aa;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 4px 0 12px;
+  font-size: 24px;
+}
+
+input,
+select,
+button {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid #29406b;
+  background: #111b30;
+  color: #eef5ff;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+button {
+  cursor: pointer;
+  background: linear-gradient(120deg, #31d0aa, #2f8fd9);
+  color: #06101d;
+  font-weight: 700;
+}
+
+.row,
+.toolbar,
+.entry-head {
+  display: flex;
+  gap: 8px;
+}
+
+#status {
+  min-height: 18px;
+  color: #9cb0d6;
+  font-size: 12px;
+}
+
+.entries {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.entry {
+  border: 1px solid #29406b;
+  border-radius: 12px;
+  padding: 10px;
+  background: #111b30;
+}
+
+.entry h2,
+.entry p {
+  margin: 0;
+}
+
+.meta {
+  font-size: 12px;
+  color: #9cb0d6;
+}
+
+.code {
+  margin-top: 6px;
+  font-family: monospace;
+  font-size: 28px;
+}
+
+.entry-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.entry-actions button {
+  margin-top: 0;
+  padding: 8px 10px;
+}

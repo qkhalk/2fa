@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Personal OTP Vault",
+  "version": "0.1.0",
+  "description": "Popup-based TOTP manager for personal use.",
+  "action": {
+    "default_title": "Personal OTP Vault",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "clipboardRead"
+  ]
+}

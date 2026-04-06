@@ -3,10 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1220">
   <title>Personal OTP Vault</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -14,95 +16,182 @@
   <div class="bg-orb orb-2" aria-hidden="true"></div>
 
   <main class="app-shell">
-    <header class="hero">
-      <p class="kicker">offline-friendly</p>
-      <h1>Personal OTP Vault</h1>
-      <p class="subtitle">
-        A local TOTP generator page inspired by 2FA quick-code tools. Secrets stay in your browser.
-      </p>
+    <header class="hero panel">
+      <div>
+        <p class="kicker">offline-friendly</p>
+        <h1>Personal OTP Vault</h1>
+        <p class="subtitle">
+          Local-first TOTP manager with optional encrypted storage, QR import, backups, and installable app support.
+        </p>
+      </div>
+      <div class="hero-actions">
+        <button type="button" id="install-app" class="btn ghost">Install App</button>
+        <button type="button" id="lock-app" class="btn ghost">Lock</button>
+      </div>
     </header>
 
-    <section class="panel panel-input">
-      <h2>Add OTP Entry</h2>
-      <p class="privacy-note">
-        Privacy first: codes are generated locally in your browser. Saving secrets to this device is optional.
-      </p>
-      <form id="otp-form" autocomplete="off">
-        <div class="grid">
-          <label>
-            <span>Base32 Secret</span>
-            <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
-          </label>
-
-          <label>
-            <span>Label (optional)</span>
-            <input id="label" name="label" type="text" placeholder="GitHub - jane@site.com">
-          </label>
-
-          <label>
-            <span>Digits</span>
-            <select id="digits" name="digits">
-              <option value="6" selected>6</option>
-              <option value="8">8</option>
-            </select>
-          </label>
-
-          <label>
-            <span>Period (seconds)</span>
-            <input id="period" name="period" type="number" min="15" max="120" value="30" required>
-          </label>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn primary">Save Entry</button>
-          <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
-          <button type="button" id="import-clipboard" class="btn ghost">Import from Clipboard</button>
-          <button type="button" id="clear-all" class="btn danger">Clear All</button>
-        </div>
-
-        <label class="uri-row">
-          <span>otpauth:// URI</span>
-          <input id="uri" type="text" placeholder="otpauth://totp/GitHub:jane?secret=...&period=30&digits=6">
-        </label>
-
-        <div class="import-grid">
-          <label>
-            <span>QR image file</span>
-            <input id="qr-file" type="file" accept="image/*">
-          </label>
-          <label>
-            <span>QR image URL</span>
-            <div class="inline-action">
-              <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
-              <button type="button" id="import-qr-url" class="btn ghost small">Import Link</button>
-            </div>
-          </label>
-        </div>
-
-        <p id="import-status" class="import-status" aria-live="polite"></p>
-
-        <label class="persist-row">
-          <input id="persist-toggle" type="checkbox">
-          <span>Remember entries on this device (uses localStorage, less safe on shared devices)</span>
-        </label>
-      </form>
+    <section id="unlock-panel" class="panel unlock-panel hidden">
+      <div class="unlock-copy">
+        <h2>Vault Locked</h2>
+        <p>Unlock with your passphrase to read encrypted entries stored on this device.</p>
+      </div>
+      <div class="unlock-actions">
+        <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
+        <button type="button" id="unlock-btn" class="btn primary">Unlock Vault</button>
+      </div>
+      <p id="unlock-status" class="helper-text" aria-live="polite"></p>
     </section>
 
-    <section class="panel panel-codes">
-      <div class="codes-header">
-        <h2>Current Codes</h2>
-        <div class="codes-tools">
-          <label class="search-wrap" aria-label="Search entries">
-            <input id="search" type="search" placeholder="Search entries">
+    <section class="workspace">
+      <section class="panel panel-left">
+        <div class="section-head">
+          <h2>Add OTP Entry</h2>
+          <p class="privacy-note">
+            Privacy first: codes are generated locally in your browser. Device storage is optional and can be encrypted.
+          </p>
+        </div>
+
+        <form id="otp-form" autocomplete="off">
+          <div class="grid">
+            <label>
+              <span>Base32 Secret</span>
+              <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
+            </label>
+
+            <label>
+              <span>Label (optional)</span>
+              <input id="label" name="label" type="text" placeholder="GitHub:user@example.com">
+            </label>
+
+            <label>
+              <span>Digits</span>
+              <select id="digits" name="digits">
+                <option value="6" selected>6</option>
+                <option value="8">8</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Period (seconds)</span>
+              <input id="period" name="period" type="number" min="15" max="120" value="30" required>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn primary">Save Entry</button>
+            <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
+            <button type="button" id="import-clipboard" class="btn ghost">Clipboard</button>
+            <button type="button" id="clear-all" class="btn danger">Clear All</button>
+          </div>
+
+          <label class="uri-row">
+            <span>otpauth:// URI</span>
+            <input id="uri" type="text" placeholder="otpauth://totp/GitHub:user@example.com?secret=...&period=30&digits=6">
           </label>
-          <div class="timer-wrap">
-            <span id="timer-value">30s</span>
-            <div class="timer-track"><div id="timer-bar"></div></div>
+
+          <div class="import-grid">
+            <label>
+              <span>QR image file</span>
+              <input id="qr-file" type="file" accept="image/*">
+            </label>
+
+            <label>
+              <span>QR image URL</span>
+              <div class="inline-action">
+                <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
+                <button type="button" id="import-qr-url" class="btn ghost small">Import</button>
+              </div>
+            </label>
+          </div>
+
+          <div class="scan-box">
+            <div class="scan-head">
+              <span>Camera QR Scan</span>
+              <div class="scan-actions">
+                <button type="button" id="start-camera" class="btn ghost small">Start Camera</button>
+                <button type="button" id="stop-camera" class="btn ghost small">Stop</button>
+              </div>
+            </div>
+            <video id="camera-preview" playsinline muted></video>
+            <p class="helper-text">Scan a TOTP QR from another screen directly into your vault.</p>
+          </div>
+
+          <p id="import-status" class="import-status" aria-live="polite"></p>
+        </form>
+
+        <section class="settings-box">
+          <div class="section-head compact">
+            <h2>Privacy & Backup</h2>
+          </div>
+
+          <label class="persist-row">
+            <input id="persist-toggle" type="checkbox">
+            <span>Remember entries on this device</span>
+          </label>
+
+          <label class="persist-row">
+            <input id="encrypt-toggle" type="checkbox">
+            <span>Encrypt stored entries with a passphrase</span>
+          </label>
+
+          <label class="persist-row">
+            <input id="unlock-on-load" type="checkbox">
+            <span>Require unlock when opening this app</span>
+          </label>
+
+          <label class="persist-row">
+            <input id="blur-codes-toggle" type="checkbox">
+            <span>Blur OTP codes until hovered or focused</span>
+          </label>
+
+          <label class="persist-row">
+            <input id="clear-clipboard-toggle" type="checkbox">
+            <span>Clear clipboard 30 seconds after copy</span>
+          </label>
+
+          <div id="encryption-fields" class="grid hidden">
+            <label>
+              <span>Vault passphrase</span>
+              <input id="vault-passphrase" type="password" placeholder="Use a strong passphrase">
+            </label>
+            <label>
+              <span>Confirm passphrase</span>
+              <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
+            <label class="btn ghost backup-import-label">
+              <span>Import Backup</span>
+              <input id="import-backup" type="file" accept="application/json">
+            </label>
+            <button type="button" id="save-settings" class="btn primary">Save Privacy Settings</button>
+          </div>
+
+          <p id="settings-status" class="helper-text" aria-live="polite"></p>
+        </section>
+      </section>
+
+      <section class="panel panel-right">
+        <div class="codes-header">
+          <div>
+            <h2>Current Codes</h2>
+            <p class="helper-text">Authenticator-style list with per-entry timers and account grouping.</p>
+          </div>
+          <div class="codes-tools">
+            <label class="search-wrap" aria-label="Search entries">
+              <input id="search" type="search" placeholder="Search issuer or account">
+            </label>
+            <div class="timer-wrap">
+              <span id="timer-value">30s</span>
+              <div class="timer-track"><div id="timer-bar"></div></div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div id="entries" class="entries" aria-live="polite"></div>
+        <div id="entries" class="entries" aria-live="polite"></div>
+      </section>
     </section>
   </main>
 
@@ -110,8 +199,13 @@
     <article class="entry">
       <div class="entry-avatar" aria-hidden="true"></div>
       <div class="entry-main">
-        <h3 class="entry-label"></h3>
-        <p class="entry-meta"></p>
+        <div class="entry-heading">
+          <div>
+            <h3 class="entry-label"></h3>
+            <p class="entry-account"></p>
+          </div>
+          <p class="entry-meta"></p>
+        </div>
         <p class="entry-code">------</p>
         <div class="entry-countdown">
           <span class="entry-seconds"></span>
@@ -120,6 +214,8 @@
       </div>
       <div class="entry-actions">
         <button type="button" class="btn small copy">Copy</button>
+        <button type="button" class="btn small reveal">Reveal</button>
+        <button type="button" class="btn small pin">Pin</button>
         <button type="button" class="btn small remove">Remove</button>
       </div>
     </article>
@@ -129,11 +225,8 @@
     <form method="dialog" class="privacy-dialog-card">
       <h3>Before enabling device storage</h3>
       <p>
-        Your 2FA secrets will be saved in <code>localStorage</code> on this browser. Anyone with access to this
-        browser profile may be able to read them.
-      </p>
-      <p>
-        Use this only on a trusted personal device.
+        Your 2FA secrets will be saved in browser storage on this device. Use encrypted storage for better privacy,
+        and only enable this on a trusted personal device.
       </p>
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">Cancel</button>
