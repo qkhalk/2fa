@@ -63,3 +63,4 @@ Suggested flow:
 
 - This repo keeps some local-only workflow files ignored from Git on purpose.
 - The app is designed for trusted personal devices. Encrypted storage is strongly recommended when persistence is enabled.
+- Safari/iOS offline notes are documented in `docs/offline-compatibility.md`.
