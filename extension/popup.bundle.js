@@ -1,4 +1,4 @@
-// lib/otp.js
+// extension/popup.js
 var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
@@ -239,8 +239,6 @@ function formatCode(code) {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
 }
-
-// lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 function toBase64(uint8) {
@@ -327,8 +325,6 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
     });
   }
 }
-
-// extension/popup.js
 var STORAGE_KEY = "otp_extension_entries_v2";
 var ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 var SETTINGS_KEY = "otp_extension_settings_v1";

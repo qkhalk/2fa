@@ -60,7 +60,7 @@ test("rejects invalid manual input and invalid URI false positives", async ({ pa
   await addEntry(page, { label: "Broken", secret: "NOT-BASE32!" });
   await expect(page.locator("#import-status")).toContainText("Secret contains invalid Base32 characters");
 
-  await page.getByLabel("otpauth:// URI").fill("otpauth://totp/Foo:bar?secret=BAD*&digits=6&period=30");
+  await page.locator("#uri").fill("otpauth://totp/Foo:bar?secret=BAD*&digits=6&period=30");
   await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
   await expect(page.locator("#import-status")).toContainText("No valid otpauth:// URI found");
 });
@@ -68,18 +68,20 @@ test("rejects invalid manual input and invalid URI false positives", async ({ pa
 test("imports OTP URIs from surrounding text and supports search, pin, and remove", async ({ page }) => {
   await loadApp(page);
 
-  await page.getByLabel("otpauth:// URI").fill(
+  await page.locator("#uri").fill(
     "Please import otpauth://totp/Example:user@example.com?secret=JBSWY3DPEHPK3PXP&period=30&digits=6."
   );
   await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
+  await expect(page.locator("#import-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Import Entries" }).click();
   await addEntry(page, { label: "Zeta:user@example.com", secret: SECONDARY_SECRET });
 
   await page.locator(".entry").nth(1).getByRole("button", { name: "Pin" }).click();
   await expect(page.locator(".entry-label").first()).toHaveText("Zeta");
 
-  await page.getByPlaceholder("Search issuer or account").fill("example");
+  await page.locator("#search").fill("example");
   await expect(page.locator(".entry")).toHaveCount(2);
-  await page.getByPlaceholder("Search issuer or account").fill("zeta");
+  await page.locator("#search").fill("zeta");
   await expect(page.locator(".entry")).toHaveCount(1);
 
   await page.locator(".entry").first().getByRole("button", { name: "Remove" }).click();
@@ -126,6 +128,8 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
     mimeType: "application/json",
     buffer: plainBackup,
   });
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await page.locator("#confirm-backup-import").click();
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
   await expect(page.locator(".entry")).toHaveCount(1);
 
@@ -148,6 +152,9 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
     mimeType: "application/json",
     buffer: encryptedBackup,
   });
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await page.locator("#backup-import-passphrase").fill(PASSPHRASE);
+  await page.locator("#confirm-backup-import").click();
 
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
   await expect(page.locator(".entry")).toHaveCount(1);

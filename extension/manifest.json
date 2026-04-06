@@ -3,9 +3,22 @@
   "name": "Personal OTP Vault",
   "version": "0.1.0",
   "description": "Popup-based TOTP manager for personal use.",
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "Personal OTP Vault",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
   },
   "permissions": [
     "storage",

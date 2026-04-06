@@ -3,16 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync:extension-lib": "node ./scripts/sync-extension-lib.mjs",
+    "build:icons": "node ./scripts/generate-icons.mjs",
+    "build": "npm run build:icons && node ./scripts/build.mjs",
     "serve:test": "http-server . -p 4173 -c-1 --silent",
-    "test:unit": "npm run sync:extension-lib && vitest run",
-    "test:e2e": "npm run sync:extension-lib && playwright test",
+    "test:unit": "npm run build && vitest run",
+    "test:e2e": "npm run build && playwright test",
     "test": "npm run test:unit && npm run test:e2e",
     "test:ci": "npm run test"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",
+    "esbuild": "^0.25.10",
     "http-server": "^14.1.1",
+    "sharp": "^0.34.4",
     "vitest": "^3.2.4"
   }
 }

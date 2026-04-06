@@ -17,6 +17,8 @@ describe("vault helpers", () => {
       digits: 6,
       period: 30,
       pinned: false,
+      tags: [],
+      createdAt: 1,
     },
   ];
 
@@ -24,7 +26,7 @@ describe("vault helpers", () => {
     const payload = await encryptEntries(entries, "correct horse battery");
     const decrypted = await decryptVaultEntries(payload, "correct horse battery");
 
-    expect(decrypted).toEqual(entries);
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
   });
 
   it("rejects the wrong passphrase", async () => {
@@ -34,21 +36,24 @@ describe("vault helpers", () => {
     );
   });
 
-  it("parses plain backups", () => {
-    const backup = createPlainBackup(entries);
+  it("parses plain backups", async () => {
+    const backup = await createPlainBackup(entries);
     const parsed = parseBackupFile(backup);
 
-    expect(parsed).toEqual({
+    await expect(parsed).resolves.toEqual(expect.objectContaining({
       encrypted: false,
-      entries,
-    });
+      integrity: "verified",
+      itemCount: 1,
+      entries: [expect.objectContaining(entries[0])],
+    }));
   });
 
   it("parses encrypted backups", async () => {
     const backup = createEncryptedBackup(await encryptEntries(entries, "correct horse battery"));
-    const parsed = parseBackupFile(backup);
+    const parsed = await parseBackupFile(await backup);
 
     expect(parsed.encrypted).toBe(true);
+    expect(parsed.integrity).toBe("verified");
     expect(parsed.vault).toHaveProperty("salt");
     expect(parsed.vault).toHaveProperty("iv");
     expect(parsed.vault).toHaveProperty("data");

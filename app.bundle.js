@@ -1,4 +1,4 @@
-// lib/otp.js
+// app.js
 var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
@@ -255,8 +255,6 @@ function formatCode(code) {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
 }
-
-// lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 var BACKUP_VERSION = 2;
@@ -448,8 +446,6 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
     entries: entries2
   };
 }
-
-// app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
@@ -967,11 +963,9 @@ async function addEntry(input) {
   await replaceEntries([...entries, entry]);
   return entry;
 }
-
 function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   const unique = [];
-  const seen = new Set();
-
+  const seen = /* @__PURE__ */ new Set();
   for (const uri of uris) {
     try {
       const entry = parseOtpAuthUri(uri);
@@ -983,50 +977,36 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
       continue;
     }
   }
-
   if (unique.length === 0) throw new Error(`No new entries found from ${sourceLabel}`);
   return unique;
 }
-
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
-
   importPreviewTitle.textContent = `Review ${importPreviewState.candidates.length} candidate${importPreviewState.candidates.length === 1 ? "" : "s"}`;
   importPreviewStatus.textContent = `${importPreviewState.sourceLabel}: only valid, non-duplicate entries are shown below.`;
   importPreviewList.innerHTML = "";
-
   for (const entry of importPreviewState.candidates) {
     const row = document.createElement("article");
     row.className = "preview-item";
-    row.innerHTML = `<strong>${entry.label}</strong><p>${entry.digits} digits • ${entry.period}s • ${(entry.tags || []).join(", ") || "No tags yet"}</p>`;
+    row.innerHTML = `<strong>${entry.label}</strong><p>${entry.digits} digits \u2022 ${entry.period}s \u2022 ${(entry.tags || []).join(", ") || "No tags yet"}</p>`;
     importPreviewList.appendChild(row);
   }
 }
-
 function openImportPreview(candidates, sourceLabel) {
   importPreviewState = { candidates, sourceLabel };
   if (importPreviewTagsInput) importPreviewTagsInput.value = "";
   renderImportPreview();
   importDialog?.showModal?.();
 }
-
 async function commitImportPreview() {
   if (!importPreviewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
   const enriched = importPreviewState.candidates.map((entry) => ({
     ...entry,
-    tags: normalizeTags([...(entry.tags || []), ...extraTags]),
+    tags: normalizeTags([...entry.tags || [], ...extraTags])
   }));
   await replaceEntries([...entries, ...enriched]);
   setImportStatus(`${importPreviewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
-}
-async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
-  const parsed = parseOtpAuthUri(otpUri);
-  if (hasDuplicateEntry(entries, parsed)) {
-    throw new Error("This account already exists");
-  }
-  await replaceEntries([...entries, parsed]);
-  setImportStatus(`${sourceLabel}: account imported`, "success");
 }
 async function decodeQrFromBlob(blob) {
   if (typeof window.jsQR !== "function") {

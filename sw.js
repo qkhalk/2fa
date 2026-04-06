@@ -1,11 +1,9 @@
-const CACHE_NAME = "otp-vault-cache-v1";
+const CACHE_NAME = "otp-vault-cache-v2";
 const APP_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
-  "./app.js",
-  "./lib/otp.js",
-  "./lib/vault.js",
+  "./app.bundle.js",
   "./manifest.webmanifest",
   "./icon.svg",
 ];
