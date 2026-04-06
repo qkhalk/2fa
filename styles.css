@@ -550,13 +550,14 @@ textarea {
 
 .entry {
   display: grid;
-  grid-template-columns: auto 48px minmax(0, 1fr) auto;
+  grid-template-columns: auto 48px minmax(0, 1fr);
   gap: 14px;
   padding: 16px;
   border-radius: 24px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(18, 21, 29, 0.9), rgba(10, 12, 18, 0.98));
   transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+  align-items: start;
 }
 
 .entry:hover {
@@ -594,6 +595,7 @@ textarea {
 .entry-main {
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .entry-account,
@@ -607,6 +609,8 @@ textarea {
 .entry-code {
   font-size: clamp(1.8rem, 3vw, 2.4rem);
   letter-spacing: 0.12em;
+  line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .entry-tag-row {
@@ -627,9 +631,28 @@ textarea {
 }
 
 .entry-actions {
-  align-items: start;
+  grid-column: 2 / 4;
+  padding-top: 10px;
+  margin-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  align-items: center;
   flex-wrap: wrap;
-  justify-content: end;
+  justify-content: flex-start;
+}
+
+.entry-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.entry-heading > div {
+  min-width: 0;
+}
+
+.entry-label,
+.entry-account {
+  overflow-wrap: anywhere;
 }
 
 .entry.urgent {

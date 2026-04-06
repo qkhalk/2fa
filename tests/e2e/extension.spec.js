@@ -61,3 +61,47 @@ test("extension popup supports adding and filtering OTP entries", async () => {
     await context.close();
   }
 });
+
+test("extension popup supports encryption, unlock, and copy history", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-secure-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Secure:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#encrypt-toggle").check();
+    await page.locator("#passphrase").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").press("Enter");
+    await expect(page.locator("#status")).toContainText("Encrypted extension vault saved");
+
+    await page.locator("#lock-btn").click();
+    await expect(page.locator("#unlock-panel")).toBeVisible();
+    await page.locator("#unlock-passphrase").fill("correct horse battery");
+    await page.locator("#unlock-passphrase").press("Enter");
+    await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
+
+    await page.locator(".entry-card").first().getByRole("button", { name: "Copy" }).click();
+    await expect(page.locator(".history-item")).toHaveCount(1);
+    await expect(page.locator(".history-item")).toContainText(["Secure:user@example.com"]);
+  } finally {
+    await context.close();
+  }
+});

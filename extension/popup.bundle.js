@@ -360,6 +360,9 @@ var passphraseInput = document.getElementById("passphrase");
 var passphraseConfirmInput = document.getElementById("passphrase-confirm");
 var saveSecurityBtn = document.getElementById("save-security");
 var copyHistoryRoot = document.getElementById("copy-history");
+var unlockForm = document.getElementById("unlock-form");
+var securityForm = document.getElementById("security-form");
+var editEntryForm = document.getElementById("edit-entry-form");
 var editEntryDialog = document.getElementById("edit-entry-dialog");
 var editEntryIdInput = document.getElementById("edit-entry-id");
 var editLabelInput = document.getElementById("edit-label");
@@ -753,25 +756,8 @@ function bindEvents() {
   encryptToggle.addEventListener("change", () => {
     passphraseFields.classList.toggle("hidden", !encryptToggle.checked);
   });
-  passphraseConfirmInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      saveSecurityBtn.click();
-    }
-  });
-  unlockPassphraseInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      unlockBtn.click();
-    }
-  });
-  editPeriodInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      saveEditBtn.click();
-    }
-  });
-  saveSecurityBtn.addEventListener("click", async () => {
+  securityForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       settings.encrypt = encryptToggle.checked;
       if (settings.encrypt) {
@@ -808,7 +794,8 @@ function bindEvents() {
     setLocked(true);
     renderEntries();
   });
-  unlockBtn.addEventListener("click", async () => {
+  unlockForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
       const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
@@ -828,7 +815,8 @@ function bindEvents() {
   cancelEditBtn.addEventListener("click", () => {
     editEntryDialog.close("cancel");
   });
-  saveEditBtn.addEventListener("click", async () => {
+  editEntryForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       await saveEditedEntry();
       editEntryDialog.close("accept");

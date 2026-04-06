@@ -66,15 +66,18 @@
       <div class="section-head">
         <h2>Extension Vault</h2>
       </div>
-      <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
-      <button id="unlock-btn" class="primary-btn" type="button">Unlock</button>
-      <p id="unlock-status" class="status" aria-live="polite"></p>
+      <form id="unlock-form">
+        <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
+        <button id="unlock-btn" class="primary-btn" type="submit">Unlock</button>
+        <p id="unlock-status" class="status" aria-live="polite"></p>
+      </form>
     </section>
 
     <section class="panel settings-panel">
       <div class="section-head">
         <h2>Security</h2>
       </div>
+      <form id="security-form">
       <label class="toggle-row">
         <input id="encrypt-toggle" type="checkbox">
         <span>Encrypt entries in extension storage</span>
@@ -83,7 +86,8 @@
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
       </div>
-      <button id="save-security" class="ghost-btn" type="button">Save Security Settings</button>
+      <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
+      </form>
     </section>
 
     <section class="panel history-panel">
@@ -129,6 +133,7 @@
   <script type="module" src="popup.bundle.js"></script>
 
   <dialog id="edit-entry-dialog" class="panel hidden-dialog">
+    <form id="edit-entry-form">
     <div class="section-head">
       <h2>Edit Entry</h2>
     </div>
@@ -146,8 +151,9 @@
     <p id="edit-status" class="status" aria-live="polite"></p>
     <div class="row two-up">
       <button id="cancel-edit" class="ghost-btn" type="button">Cancel</button>
-      <button id="save-edit" class="primary-btn" type="button">Save</button>
+      <button id="save-edit" class="primary-btn" type="submit">Save</button>
     </div>
+    </form>
   </dialog>
 </body>
 </html>

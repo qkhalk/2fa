@@ -53,10 +53,10 @@
         <h2 id="unlock-heading">Vault locked on this device</h2>
         <p class="helper-text">Unlock with your passphrase to read encrypted entries stored locally.</p>
       </div>
-      <div class="unlock-actions">
+      <form id="unlock-form" class="unlock-actions">
         <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
-        <button type="button" id="unlock-btn" class="btn primary">Unlock Vault</button>
-      </div>
+        <button type="submit" id="unlock-btn" class="btn primary">Unlock Vault</button>
+      </form>
       <p id="unlock-status" class="helper-text status-line" aria-live="polite"></p>
     </section>
 
@@ -164,6 +164,7 @@
             <h2>Device & Backup Controls</h2>
           </div>
 
+          <form id="settings-form">
           <div class="toggle-grid">
             <label class="toggle-row">
               <input id="persist-toggle" type="checkbox">
@@ -208,10 +209,11 @@
               <span>Import Backup</span>
               <input id="import-backup" type="file" accept="application/json">
             </label>
-            <button type="button" id="save-settings" class="btn primary">Save Privacy Settings</button>
+            <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
           </div>
 
           <p id="settings-status" class="helper-text status-line" aria-live="polite"></p>
+          </form>
         </section>
       </aside>
 
@@ -319,7 +321,7 @@
   </template>
 
   <dialog id="privacy-dialog" class="dialog-shell">
-    <form method="dialog" class="dialog-card">
+    <form id="privacy-form" method="dialog" class="dialog-card">
       <p class="eyebrow">storage warning</p>
       <h3>Before enabling device storage</h3>
       <p>Your 2FA secrets will be saved in browser storage on this device. Use encrypted storage and only enable this on trusted hardware.</p>
@@ -331,7 +333,7 @@
   </dialog>
 
   <dialog id="import-dialog" class="dialog-shell">
-    <form method="dialog" class="dialog-card">
+    <form id="import-preview-form" method="dialog" class="dialog-card">
       <p class="eyebrow">import review</p>
       <h3 id="import-preview-title">Review import candidates</h3>
       <p id="import-preview-status" class="helper-text">The vault only imports entries that pass strict URI validation.</p>
@@ -348,7 +350,7 @@
   </dialog>
 
   <dialog id="backup-review-dialog" class="dialog-shell">
-    <form method="dialog" class="dialog-card">
+    <form id="backup-review-form" method="dialog" class="dialog-card">
       <p class="eyebrow">backup review</p>
       <h3>Review backup before import</h3>
       <div id="backup-review-summary" class="preview-list"></div>
@@ -372,7 +374,7 @@
   </dialog>
 
   <dialog id="edit-entry-dialog" class="dialog-shell">
-    <form method="dialog" class="dialog-card">
+    <form id="edit-entry-form" method="dialog" class="dialog-card">
       <p class="eyebrow">edit entry</p>
       <h3>Edit vault entry</h3>
       <input id="edit-entry-id" type="hidden">

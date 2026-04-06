@@ -513,6 +513,11 @@ var unlockPassphraseInput = document.getElementById("unlock-passphrase");
 var unlockBtn = document.getElementById("unlock-btn");
 var unlockStatus = document.getElementById("unlock-status");
 var privacyDialog = document.getElementById("privacy-dialog");
+var unlockForm = document.getElementById("unlock-form");
+var settingsForm = document.getElementById("settings-form");
+var importPreviewForm = document.getElementById("import-preview-form");
+var backupReviewForm = document.getElementById("backup-review-form");
+var editEntryForm = document.getElementById("edit-entry-form");
 var importDialog = document.getElementById("import-dialog");
 var importPreviewTitle = document.getElementById("import-preview-title");
 var importPreviewStatus = document.getElementById("import-preview-status");
@@ -1131,8 +1136,8 @@ function openImportPreview(candidates, sourceLabel) {
   importDialog?.showModal?.();
 }
 
-async function commitImportPreview() {
-  if (!importPreviewState) return;
+async function commitImportPreview(previewState = importPreviewState) {
+  if (!previewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
   let nextOrder = nextOrderValue();
   const rows = [...importPreviewList.querySelectorAll(".preview-item")];
@@ -1140,7 +1145,7 @@ async function commitImportPreview() {
     const include = row.querySelector(".preview-include");
     if (!include?.checked) return [];
     const index = Number(row.dataset.index);
-    const baseEntry = importPreviewState.candidates[index];
+    const baseEntry = previewState.candidates[index];
     return [{
       ...baseEntry,
       label: row.querySelector(".preview-label")?.value.trim() || baseEntry.label,
@@ -1154,7 +1159,7 @@ async function commitImportPreview() {
   });
   if (enriched.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...enriched]);
-  setImportStatus(`${importPreviewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
+  setImportStatus(`${previewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
 }
 async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
   const parsed = normalizeEntry({ ...parseOtpAuthUri(otpUri), order: nextOrderValue() });
@@ -1419,30 +1424,6 @@ function bindEvents() {
   encryptToggle.addEventListener("change", () => {
     encryptionFields.classList.toggle("hidden", !encryptToggle.checked);
   });
-  vaultPassphraseConfirmInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      saveSettingsBtn.click();
-    }
-  });
-  unlockPassphraseInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      unlockBtn.click();
-    }
-  });
-  backupImportPassphraseInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      document.getElementById("confirm-backup-import")?.click();
-    }
-  });
-  editPeriodInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      document.getElementById("save-entry-edit")?.click();
-    }
-  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -1588,7 +1569,8 @@ function bindEvents() {
       setImportStatus(toUserMessage(error, "Could not remove selected entries"), "error");
     }
   });
-  saveSettingsBtn.addEventListener("click", async () => {
+  settingsForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       await handleSaveSettings();
     } catch (error) {
@@ -1626,7 +1608,8 @@ function bindEvents() {
     setLocked(true);
     renderEntries();
   });
-  unlockBtn.addEventListener("click", async () => {
+  unlockForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       await unlockVault(unlockPassphraseInput.value);
       unlockPassphraseInput.value = "";
@@ -1660,30 +1643,51 @@ function bindEvents() {
       persistToggle.checked = settings.persist;
     }
   });
-  importDialog?.addEventListener("close", () => {
-    if (importDialog.returnValue === "accept") {
-      commitImportPreview().catch((error) => {
-        reportError("Import preview commit failed", error);
-        setImportStatus(toUserMessage(error, "Could not import entries"), "error");
-      });
+  importPreviewForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await commitImportPreview(importPreviewState);
+      importPreviewState = null;
+      importDialog.close();
+    } catch (error) {
+      reportError("Import preview commit failed", error);
+      setImportStatus(toUserMessage(error, "Could not import entries"), "error");
     }
+  });
+  importDialog?.addEventListener("close", () => {
     importPreviewState = null;
   });
-  backupReviewDialog?.addEventListener("close", () => {
-    if (backupReviewDialog.returnValue === "accept") {
-      commitBackupImport().then(() => setSettingsStatus("Backup imported", "success")).catch((error) => setSettingsStatus(toUserMessage(error, "Could not import backup"), "error"));
+
+  backupReviewForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await commitBackupImport();
+      backupImportState = null;
+      backupReviewDialog.close();
+      setSettingsStatus("Backup imported", "success");
+    } catch (error) {
+      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
     }
+  });
+  backupReviewDialog?.addEventListener("close", () => {
     backupImportState = null;
   });
 
-  editEntryDialog?.addEventListener("close", () => {
-    if (editEntryDialog.returnValue === "accept") {
-      saveEditedEntry()
-        .then(() => setImportStatus("Entry updated", "success"))
-        .catch((error) => setStatus(editEntryStatus, toUserMessage(error, "Could not update entry"), "error"));
-    } else {
-      setStatus(editEntryStatus, "");
+  editEntryForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await saveEditedEntry();
+      editEntryDialog.close();
+      setImportStatus("Entry updated", "success");
+    } catch (error) {
+      setStatus(editEntryStatus, toUserMessage(error, "Could not update entry"), "error");
     }
+  });
+  editEntryDialog?.addEventListener("close", () => {
+    setStatus(editEntryStatus, "");
   });
 }
 window.otpVaultDebug = {
