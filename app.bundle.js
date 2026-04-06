@@ -642,9 +642,16 @@ function loadVaultOnStartup() {
     return;
   }
   if (settings.encrypt) {
+    const encryptedPayload = localStorage.getItem(ENCRYPTED_VAULT_KEY);
+    const legacyPlainEntries = loadPlainEntries();
+    if (!encryptedPayload && legacyPlainEntries.length > 0) {
+      entries = legacyPlainEntries;
+      setLocked(false);
+      return;
+    }
     entries = [];
     setLocked(true);
-    if (!settings.unlockOnLoad && !localStorage.getItem(ENCRYPTED_VAULT_KEY)) {
+    if (!settings.unlockOnLoad && !encryptedPayload) {
       setLocked(false);
     }
     return;
@@ -1383,6 +1390,30 @@ function bindEvents() {
   });
   encryptToggle.addEventListener("change", () => {
     encryptionFields.classList.toggle("hidden", !encryptToggle.checked);
+  });
+  vaultPassphraseConfirmInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveSettingsBtn.click();
+    }
+  });
+  unlockPassphraseInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      unlockBtn.click();
+    }
+  });
+  backupImportPassphraseInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      document.getElementById("confirm-backup-import")?.click();
+    }
+  });
+  editPeriodInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      document.getElementById("save-entry-edit")?.click();
+    }
   });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();

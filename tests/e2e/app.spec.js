@@ -108,7 +108,7 @@ test("persists encrypted vaults and unlocks after reload", async ({ page }) => {
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
   await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
-  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await page.locator("#vault-passphrase-confirm").press("Enter");
   await acceptPersistWarning(page);
 
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
@@ -120,6 +120,34 @@ test("persists encrypted vaults and unlocks after reload", async ({ page }) => {
 
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
   await expect(page.locator(".entry")).toHaveCount(1);
+});
+
+test("migrates legacy plain entries when encryption is enabled but encrypted data does not exist", async ({ page }) => {
+  await page.addInitScript(({ secret }) => {
+    localStorage.setItem("personal_otp_vault_entries_v2", JSON.stringify([{
+      id: "legacy-1",
+      label: "Legacy:user@example.com",
+      secret,
+      digits: 6,
+      period: 30,
+      pinned: false,
+    }]));
+    localStorage.setItem("personal_otp_vault_settings_v3", JSON.stringify({
+      persist: true,
+      encrypt: true,
+      unlockOnLoad: true,
+      blurCodes: false,
+      screenshotSafe: false,
+      clearClipboard: false,
+      sortBy: "pinned-alpha",
+      groupBy: "none",
+    }));
+  }, { secret: PRIMARY_SECRET });
+
+  await page.goto("/");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Legacy");
+  await expect(page.locator("#unlock-panel")).toBeHidden();
 });
 
 test("exports and reimports backups in plain and encrypted modes", async ({ page }) => {

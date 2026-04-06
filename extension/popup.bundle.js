@@ -1,4 +1,4 @@
-// extension/popup.js
+// lib/otp.js
 var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
@@ -239,6 +239,8 @@ function formatCode(code) {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
 }
+
+// lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 function toBase64(uint8) {
@@ -325,6 +327,8 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
     });
   }
 }
+
+// extension/popup.js
 var STORAGE_KEY = "otp_extension_entries_v2";
 var ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 var SETTINGS_KEY = "otp_extension_settings_v1";
@@ -401,15 +405,16 @@ function applyUiState() {
 async function saveUiState() {
   await chrome.storage.local.set({ [UI_KEY]: { collapsed } });
 }
-function setStatus(message, tone = "") {
-  statusNode.textContent = message;
-  statusNode.classList.remove("error", "success");
-  if (tone) statusNode.classList.add(tone);
+function setStatus(node, message, tone = "") {
+  node.textContent = message;
+  node.classList.remove("error", "success");
+  if (tone) node.classList.add(tone);
+}
+function setMainStatus(message, tone = "") {
+  setStatus(statusNode, message, tone);
 }
 function setUnlockStatus(message, tone = "") {
-  unlockStatus.textContent = message;
-  unlockStatus.classList.remove("error", "success");
-  if (tone) unlockStatus.classList.add(tone);
+  setStatus(unlockStatus, message, tone);
 }
 function setLocked(locked) {
   unlockPanel.classList.toggle("hidden", !locked);
@@ -520,43 +525,52 @@ async function moveEntry(entryId, direction) {
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
-  const editBtn = node.querySelector(".edit");
-  const moveUpBtn = node.querySelector(".move-up");
-  const moveDownBtn = node.querySelector(".move-down");
   node.querySelector(".copy").addEventListener("click", async () => {
     try {
       const otp = node.dataset.otp;
       if (!otp) return;
       await navigator.clipboard.writeText(otp);
       addCopyHistory(entry.label, otp);
-      setStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
+      setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
     } catch (error) {
       reportError("Extension copy failed", error);
-      setStatus(toUserMessage(error, "Could not copy OTP"), "error");
+      setMainStatus(toUserMessage(error, "Could not copy OTP"), "error");
     }
   });
-  editBtn?.addEventListener("click", () => {
+  node.querySelector(".edit")?.addEventListener("click", () => {
     openEditEntryDialog(entry);
   });
-  moveUpBtn?.addEventListener("click", async () => {
-    settings.sortBy = "custom";
-    sortSelect.value = "custom";
-    await persistSettings();
-    await moveEntry(entry.id, -1);
+  node.querySelector(".move-up")?.addEventListener("click", async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      await persistSettings();
+      await moveEntry(entry.id, -1);
+      setMainStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Extension move up failed", error);
+      setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
+    }
   });
-  moveDownBtn?.addEventListener("click", async () => {
-    settings.sortBy = "custom";
-    sortSelect.value = "custom";
-    await persistSettings();
-    await moveEntry(entry.id, 1);
+  node.querySelector(".move-down")?.addEventListener("click", async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      await persistSettings();
+      await moveEntry(entry.id, 1);
+      setMainStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Extension move down failed", error);
+      setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
+    }
   });
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
       await replaceEntries(entries.filter((item) => item.id !== entry.id));
-      setStatus("Removed entry", "success");
+      setMainStatus("Removed entry", "success");
     } catch (error) {
       reportError("Extension remove failed", error);
-      setStatus(toUserMessage(error, "Could not remove entry"), "error");
+      setMainStatus(toUserMessage(error, "Could not remove entry"), "error");
     }
   });
   return node;
@@ -637,9 +651,7 @@ async function persistSettings() {
 async function replaceEntries(nextEntries) {
   const previousEntries = entries;
   entries = normalizeEntries(nextEntries);
-  if (entries.every((entry) => !entry.order)) {
-    entries = resequenceEntries(entries);
-  }
+  if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
   try {
     await persistEntries();
   } catch (error) {
@@ -688,10 +700,10 @@ function bindEvents() {
       tagsInput.value = "";
       digitsInput.value = "6";
       periodInput.value = "30";
-      setStatus("Entry added", "success");
+      setMainStatus("Entry added", "success");
     } catch (error) {
       reportError("Extension manual entry failed", error);
-      setStatus(toUserMessage(error, "Could not add entry"), "error");
+      setMainStatus(toUserMessage(error, "Could not add entry"), "error");
     }
   });
   qrFileInput.addEventListener("change", async () => {
@@ -701,10 +713,10 @@ function bindEvents() {
       const entry = await importFromQrFile(file);
       if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
       await replaceEntries([...entries, entry]);
-      setStatus("Imported QR entry", "success");
+      setMainStatus("Imported QR entry", "success");
     } catch (error) {
       reportError("Extension QR import failed", error);
-      setStatus(toUserMessage(error, "Could not import QR file"), "error");
+      setMainStatus(toUserMessage(error, "Could not import QR file"), "error");
     } finally {
       qrFileInput.value = "";
     }
@@ -717,10 +729,10 @@ function bindEvents() {
       const entry = normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
       if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
       await replaceEntries([...entries, entry]);
-      setStatus("Imported URI from clipboard", "success");
+      setMainStatus("Imported URI from clipboard", "success");
     } catch (error) {
       reportError("Extension clipboard import failed", error);
-      setStatus(toUserMessage(error, "Could not import URI"), "error");
+      setMainStatus(toUserMessage(error, "Could not import URI"), "error");
     }
   });
   searchInput.addEventListener("input", () => {
@@ -740,6 +752,24 @@ function bindEvents() {
   });
   encryptToggle.addEventListener("change", () => {
     passphraseFields.classList.toggle("hidden", !encryptToggle.checked);
+  });
+  passphraseConfirmInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveSecurityBtn.click();
+    }
+  });
+  unlockPassphraseInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      unlockBtn.click();
+    }
+  });
+  editPeriodInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveEditBtn.click();
+    }
   });
   saveSecurityBtn.addEventListener("click", async () => {
     try {
@@ -763,15 +793,15 @@ function bindEvents() {
       passphraseInput.value = "";
       passphraseConfirmInput.value = "";
       lockBtn.disabled = !settings.encrypt;
-      setStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
+      setMainStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
     } catch (error) {
       reportError("Extension save security failed", error);
-      setStatus(toUserMessage(error, "Could not save security settings"), "error");
+      setMainStatus(toUserMessage(error, "Could not save security settings"), "error");
     }
   });
   lockBtn.addEventListener("click", () => {
     if (!settings.encrypt) {
-      setStatus("Enable encrypted storage first", "error");
+      setMainStatus("Enable encrypted storage first", "error");
       return;
     }
     entries = [];
@@ -789,20 +819,20 @@ function bindEvents() {
       renderEntries();
       tick();
       setUnlockStatus("Vault unlocked", "success");
-      setStatus("Encrypted extension unlocked", "success");
+      setMainStatus("Encrypted extension unlocked", "success");
     } catch (error) {
       reportError("Extension unlock failed", error);
       setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data"), "error");
     }
   });
-  cancelEditBtn?.addEventListener("click", () => {
+  cancelEditBtn.addEventListener("click", () => {
     editEntryDialog.close("cancel");
   });
-  saveEditBtn?.addEventListener("click", async () => {
+  saveEditBtn.addEventListener("click", async () => {
     try {
       await saveEditedEntry();
       editEntryDialog.close("accept");
-      setStatus("Entry updated", "success");
+      setMainStatus("Entry updated", "success");
     } catch (error) {
       setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
     }
