@@ -381,3 +381,92 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   await expect(page.locator(".entry")).toHaveCount(1);
   await expect(page.locator(".entry-label")).toHaveText("Original");
 });
+
+test("preserves entries when clear all persistence fails", async ({ page }) => {
+  await page.addInitScript(({ fixedNow, secret }) => {
+    const RealDate = Date;
+    class MockDate extends RealDate {
+      constructor(...args) { super(...(args.length === 0 ? [fixedNow] : args)); }
+      static now() { return fixedNow; }
+    }
+    Object.setPrototypeOf(MockDate, RealDate);
+    window.Date = MockDate;
+
+    localStorage.setItem("personal_otp_vault_settings_v3", JSON.stringify({
+      persist: true,
+      encrypt: false,
+      unlockOnLoad: true,
+      blurCodes: false,
+      screenshotSafe: false,
+      clearClipboard: false,
+      sortBy: "pinned-alpha",
+      groupBy: "none",
+    }));
+    localStorage.setItem("personal_otp_vault_persist_warning_seen_v1", "true");
+
+    window.__blockNextPlainWrite = false;
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === "personal_otp_vault_entries_v2" && window.__blockNextPlainWrite) {
+        window.__blockNextPlainWrite = false;
+        throw new Error("Simulated clear-all persistence failure");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  }, { fixedNow: FIXED_NOW, secret: PRIMARY_SECRET });
+
+  await page.goto("/");
+  await addEntry(page, { label: "Survivor:user@example.com", secret: PRIMARY_SECRET });
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  await page.evaluate(() => { window.__blockNextPlainWrite = true; });
+  await page.getByRole("button", { name: "Clear All" }).click();
+
+  await expect(page.locator("#import-status")).toContainText("Simulated clear-all persistence failure");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Survivor");
+
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_entries_v2"))).not.toBeNull();
+});
+
+test("preserves entries when replace-mode backup import persistence fails", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Survivor:user@example.com", secret: PRIMARY_SECRET });
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  await page.locator("#persist-toggle").check();
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Backup" }).click();
+  const download = await downloadPromise;
+  const backup = await readFile(await download.path());
+
+  await page.evaluate(() => {
+    window.__blockNextPlainWrite = false;
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === "personal_otp_vault_entries_v2" && window.__blockNextPlainWrite) {
+        window.__blockNextPlainWrite = false;
+        throw new Error("Simulated replace persistence failure");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  });
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "plain-backup.json",
+    mimeType: "application/json",
+    buffer: backup,
+  });
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+
+  await page.evaluate(() => { window.__blockNextPlainWrite = true; });
+  await page.locator("#backup-import-mode").selectOption("replace");
+  await page.locator("#confirm-backup-import").click();
+
+  await expect(page.locator("#settings-status")).toContainText("Simulated replace persistence failure");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Survivor");
+});
