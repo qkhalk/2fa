@@ -1201,12 +1201,16 @@ async function addEntry(input) {
 function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   const unique = [];
   const seen = new Set();
+  let skipped = 0;
 
   for (const uri of uris) {
     try {
       const entry = parseOtpAuthUri(uri);
       const key = entryKey(entry);
-      if (seen.has(key) || hasDuplicateEntry(entries, entry)) continue;
+      if (seen.has(key) || hasDuplicateEntry(entries, entry)) {
+        skipped++;
+        continue;
+      }
       seen.add(key);
       unique.push(entry);
     } catch {
@@ -1215,17 +1219,25 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   }
 
   if (unique.length === 0) throw new Error(`No new entries found from ${sourceLabel}`);
-  return unique;
+  return { candidates: unique, skipped, sourceLabel };
 }
 
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
 
-  importPreviewTitle.textContent = `Review ${importPreviewState.candidates.length} candidate${importPreviewState.candidates.length === 1 ? "" : "s"}`;
-  importPreviewStatus.textContent = `${importPreviewState.sourceLabel}: only valid, non-duplicate entries are shown below.`;
+  const candidates = importPreviewState.candidates || importPreviewState;
+  const skipped = importPreviewState.skipped || 0;
+  const sourceLabel = importPreviewState.sourceLabel || "Import";
+
+  importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
+  let statusText = `${sourceLabel}: only valid, non-duplicate entries are shown below.`;
+  if (skipped > 0) {
+    statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
+  }
+  importPreviewStatus.textContent = statusText;
   importPreviewList.innerHTML = "";
 
-  importPreviewState.candidates.forEach((entry, index) => {
+  candidates.forEach((entry, index) => {
     const row = document.createElement("article");
     row.className = "preview-item";
     row.dataset.index = String(index);
@@ -1248,8 +1260,8 @@ function renderImportPreview() {
   });
 }
 
-function openImportPreview(candidates, sourceLabel) {
-  importPreviewState = { candidates, sourceLabel };
+function openImportPreview(previewResult, sourceLabel) {
+  importPreviewState = previewResult;
   if (importPreviewTagsInput) importPreviewTagsInput.value = "";
   renderImportPreview();
   importDialog?.showModal?.();
@@ -1260,11 +1272,13 @@ async function commitImportPreview(previewState = importPreviewState) {
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
   let nextOrder = nextOrderValue();
   const rows = [...importPreviewList.querySelectorAll(".preview-item")];
+  const candidates = previewState.candidates || previewState;
+  const sourceLabel = previewState.sourceLabel || "Import";
   const enriched = rows.flatMap((row) => {
     const include = row.querySelector(".preview-include");
     if (!include?.checked) return [];
     const index = Number(row.dataset.index);
-    const baseEntry = previewState.candidates[index];
+    const baseEntry = candidates[index];
     return [{
       ...baseEntry,
       label: row.querySelector(".preview-label")?.value.trim() || baseEntry.label,
@@ -1278,7 +1292,7 @@ async function commitImportPreview(previewState = importPreviewState) {
   });
   if (enriched.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...enriched]);
-  setImportStatus(`${previewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
+  setImportStatus(`${sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
 }
 async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
   const parsed = normalizeEntry({ ...parseOtpAuthUri(otpUri), order: nextOrderValue() });
@@ -1413,14 +1427,28 @@ async function exportBackup() {
 function renderBackupReview(backup) {
   if (!backupReviewSummary) return;
   backupReviewSummary.innerHTML = "";
-  [
+
+  const backupEntries = backup.entries || [];
+  const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
+
+  let summaryItems = [
     `Integrity: ${backup.integrity === "verified" ? "verified checksum" : "legacy backup"}`,
     `Encrypted: ${backup.encrypted ? "yes" : "no"}`,
     `Schema: v${backup.schemaVersion}`,
     `Created: ${backup.createdAt || "unknown"}`,
     `Incoming items: ${backup.itemCount}`,
     `Current vault size: ${entries.length}`
-  ].forEach((item) => {
+  ];
+
+  if (mode === "merge" && backupEntries.length > 0 && entries.length > 0) {
+    const duplicates = backupEntries.filter((candidate) =>
+      entries.some((entry) => entryKey(entry) === entryKey(candidate))
+    ).length;
+    const newEntries = backupEntries.length - duplicates;
+    summaryItems.push(`Merge: ${newEntries} new, ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped`);
+  }
+
+  summaryItems.forEach((item) => {
     const row = document.createElement("div");
     row.className = "preview-item";
     row.textContent = item;
@@ -1839,6 +1867,11 @@ function bindEvents() {
       setSettingsStatus("Backup imported", "success");
     } catch (error) {
       setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
+    }
+  });
+  backupImportMode?.addEventListener("change", () => {
+    if (backupImportState?.backup) {
+      renderBackupReview(backupImportState.backup);
     }
   });
   backupReviewDialog?.addEventListener("close", () => {
