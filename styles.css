@@ -279,6 +279,16 @@ h3 {
   border-radius: 999px;
 }
 
+.btn.small.destructive {
+  margin-left: auto;
+  border-color: rgba(255, 126, 126, 0.4);
+  color: #ffd6d6;
+}
+
+.btn.small.destructive:hover {
+  border-color: rgba(255, 126, 126, 0.6);
+}
+
 .hero-signal {
   position: relative;
   display: grid;
