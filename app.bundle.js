@@ -537,6 +537,12 @@ var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
 var editEntryStatus = document.getElementById("edit-entry-status");
+var confirmDialog = document.getElementById("confirm-dialog");
+var confirmForm = document.getElementById("confirm-form");
+var confirmTitle = document.getElementById("confirm-title");
+var confirmMessage = document.getElementById("confirm-message");
+var confirmAcceptBtn = document.getElementById("confirm-accept");
+var confirmCallback = null;
 var debugToggleBtn = document.getElementById("debug-toggle");
 var debugPanel = document.getElementById("debug-panel");
 var debugList = document.getElementById("debug-list");
@@ -827,6 +833,18 @@ async function saveEditedEntry() {
   }
   await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
 }
+function showConfirmDialog(title, message) {
+  return new Promise((resolve) => {
+    if (!confirmDialog) {
+      resolve(false);
+      return;
+    }
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    confirmCallback = resolve;
+    confirmDialog.showModal();
+  });
+}
 async function moveEntry(entryId, direction) {
   const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
   const index = ordered.findIndex((entry) => entry.id === entryId);
@@ -960,6 +978,11 @@ function createEntryNode(entry) {
   };
   removeBtn.onclick = async () => {
     try {
+      const confirmed = await showConfirmDialog(
+        "Remove this entry?",
+        `This will permanently remove "${entry.label}" from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       const nextEntries = entries.filter((item) => item.id !== entry.id);
       await replaceEntries(nextEntries);
       selectedEntryIds.delete(entry.id);
@@ -1418,6 +1441,17 @@ async function stageBackupImport(file) {
 }
 async function commitBackupImport() {
   if (!backupImportState) return;
+  const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
+  if (mode === "replace" && entries.length > 0) {
+    const confirmed = await showConfirmDialog(
+      "Replace entire vault?",
+      `This will delete all ${entries.length} existing entr${entries.length === 1 ? "y" : "ies"} and replace them with the backup contents. This action cannot be undone.`
+    );
+    if (!confirmed) {
+      setSettingsStatus("Backup import cancelled", "warning");
+      return;
+    }
+  }
   await importBackupFile(backupImportState.file, backupImportState.backup);
 }
 function registerCameraDetection(uri) {
@@ -1596,6 +1630,15 @@ function bindEvents() {
   });
   clearAllBtn.addEventListener("click", async () => {
     try {
+      if (entries.length === 0) {
+        setImportStatus("No entries to clear", "warning");
+        return;
+      }
+      const confirmed = await showConfirmDialog(
+        "Clear all entries?",
+        `This will permanently remove all ${entries.length} entr${entries.length === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       await replaceEntries([]);
       setImportStatus("All entries cleared", "success");
     } catch (error) {
@@ -1635,6 +1678,13 @@ function bindEvents() {
   });
   bulkRemoveBtn?.addEventListener("click", async () => {
     try {
+      const count = selectedEntryIds.size;
+      if (count === 0) return;
+      const confirmed = await showConfirmDialog(
+        "Remove selected entries?",
+        `This will permanently remove ${count} selected entr${count === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       await replaceEntries(entries.filter((entry) => !selectedEntryIds.has(entry.id)));
       selectedEntryIds.clear();
       renderBulkBar();
@@ -1761,6 +1811,21 @@ function bindEvents() {
   });
   editEntryDialog?.addEventListener("close", () => {
     setStatus(editEntryStatus, "");
+  });
+  confirmForm?.addEventListener("submit", (event) => {
+    if (event.submitter?.value !== "accept") {
+      if (confirmCallback) confirmCallback(false);
+      confirmCallback = null;
+      return;
+    }
+    event.preventDefault();
+    if (confirmCallback) confirmCallback(true);
+    confirmCallback = null;
+    confirmDialog?.close();
+  });
+  confirmDialog?.addEventListener("close", () => {
+    if (confirmCallback) confirmCallback(false);
+    confirmCallback = null;
   });
 }
 window.otpVaultDebug = {

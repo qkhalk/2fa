@@ -96,6 +96,8 @@ test("imports OTP URIs from surrounding text and supports search, pin, and remov
   await expect(page.locator(".entry")).toHaveCount(1);
 
   await page.locator(".entry").first().getByRole("button", { name: "Remove" }).click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
   await expect(page.locator("#entries")).toContainText("No matching entries.");
 });
@@ -160,6 +162,8 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   const plainBackup = await readFile(await plainDownload.path());
 
   await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.locator("#import-backup").setInputFiles({
@@ -185,6 +189,8 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   const encryptedBackup = await readFile(await encryptedDownload.path());
 
   await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
   page.once("dialog", (dialog) => dialog.accept(PASSPHRASE));
   await page.locator("#import-backup").setInputFiles({
     name: "encrypted-backup.json",
@@ -366,6 +372,8 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   expect(verifyBackupParsed.encrypted).toBe(true);
 
   await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.locator("#import-backup").setInputFiles({
@@ -421,6 +429,8 @@ test("preserves entries when clear all persistence fails", async ({ page }) => {
 
   await page.evaluate(() => { window.__blockNextPlainWrite = true; });
   await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
 
   await expect(page.locator("#import-status")).toContainText("Simulated clear-all persistence failure");
   await expect(page.locator(".entry")).toHaveCount(1);

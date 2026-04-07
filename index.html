@@ -429,6 +429,18 @@
     </form>
   </dialog>
 
+  <dialog id="confirm-dialog" class="dialog-shell">
+    <form id="confirm-form" method="dialog" class="dialog-card">
+      <p class="eyebrow">confirm destructive action</p>
+      <h3 id="confirm-title">Are you sure?</h3>
+      <p id="confirm-message" class="helper-text">This action cannot be undone.</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn primary" type="submit">Cancel</button>
+        <button id="confirm-accept" value="accept" class="btn danger" type="submit">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
   <script type="module" src="./app.bundle.js"></script>
 </body>
