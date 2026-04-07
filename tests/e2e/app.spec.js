@@ -475,6 +475,8 @@ test("preserves entries when replace-mode backup import persistence fails", asyn
   await page.evaluate(() => { window.__blockNextPlainWrite = true; });
   await page.locator("#backup-import-mode").selectOption("replace");
   await page.locator("#confirm-backup-import").click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "Confirm" }).click();
 
   await expect(page.locator("#settings-status")).toContainText("Simulated replace persistence failure");
   await expect(page.locator(".entry")).toHaveCount(1);
