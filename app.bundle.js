@@ -485,6 +485,7 @@ var summaryTotal = document.getElementById("summary-total");
 var summaryPinned = document.getElementById("summary-pinned");
 var summaryGroups = document.getElementById("summary-groups");
 var summaryStorage = document.getElementById("summary-storage");
+var workspaceHeading = document.getElementById("workspace-heading");
 var bulkBar = document.getElementById("bulk-bar");
 var bulkSummary = document.getElementById("bulk-summary");
 var bulkTagInput = document.getElementById("bulk-tag-input");
@@ -607,6 +608,9 @@ function syncSettingsUI() {
   sortSelect.value = settings.sortBy;
   groupSelect.value = settings.groupBy;
   encryptionFields.classList.toggle("hidden", !settings.encrypt);
+  if (lockAppBtn) {
+    lockAppBtn.classList.toggle("hidden", !settings.encrypt);
+  }
 }
 function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
@@ -618,7 +622,12 @@ function renderWorkspaceSummary() {
   summaryTotal.textContent = String(entries.length);
   summaryPinned.textContent = String(entries.filter((entry) => entry.pinned).length);
   summaryGroups.textContent = String(settings.groupBy === "none" ? 1 : Math.max(groups.length, 0));
-  summaryStorage.textContent = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+  const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
+  let storageText = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+  if (isLocked) {
+    storageText += " (Locked)";
+  }
+  summaryStorage.textContent = storageText;
 }
 function renderConnectionState() {
   if (!offlineChip) return;
@@ -1013,7 +1022,11 @@ function renderEntries() {
   setOnboardingVisibility();
   renderWorkspaceSummary();
   renderConnectionState();
-  if (!unlockPanel.classList.contains("hidden") && settings.encrypt) {
+  const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
+  if (workspaceHeading) {
+    workspaceHeading.textContent = isLocked ? "Vault Locked" : "Current Codes";
+  }
+  if (isLocked) {
     showEmptyState("Vault is locked. Unlock to view your codes.");
     return;
   }
