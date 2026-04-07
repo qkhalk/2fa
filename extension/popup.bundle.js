@@ -306,6 +306,16 @@ function validateEncryptedPayload(payload) {
   }
   return payload;
 }
+function normalizeBackupEntriesStrict(entries2, { message, code }) {
+  if (!Array.isArray(entries2)) {
+    throw new OtpVaultError(message, { code });
+  }
+  const normalizedEntries = normalizeEntries(entries2);
+  if (normalizedEntries.length !== entries2.length) {
+    throw new OtpVaultError(message, { code });
+  }
+  return normalizedEntries;
+}
 async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.crypto) {
   const safeCrypto = requireCrypto(cryptoApi);
   const normalizedPassphrase = normalizePassphrase(passphrase);
@@ -318,7 +328,10 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
       fromBase64(normalizedPayload.data)
     );
     const parsed = JSON.parse(decoder.decode(decrypted));
-    return normalizeEntries(parsed);
+    return normalizeBackupEntriesStrict(parsed, {
+      message: "Decrypted vault entries are invalid",
+      code: "VAULT_ENTRIES_INVALID"
+    });
   } catch (error) {
     if (error instanceof OtpVaultError) throw error;
     throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {

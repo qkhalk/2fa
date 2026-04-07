@@ -58,4 +58,18 @@ describe("vault helpers", () => {
     expect(parsed.vault).toHaveProperty("iv");
     expect(parsed.vault).toHaveProperty("data");
   });
+
+  it("rejects plain backups that contain malformed entries", async () => {
+    const backup = await createPlainBackup([{ label: "Broken import", digits: 6, period: 30 }]);
+
+    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+  });
+
+  it("rejects decrypted vault payloads that contain malformed entries", async () => {
+    const payload = await encryptEntries([{ label: "Broken import", digits: 6, period: 30 }], "correct horse battery");
+
+    await expect(decryptVaultEntries(payload, "correct horse battery")).rejects.toThrow(
+      "Decrypted vault entries are invalid"
+    );
+  });
 });
