@@ -368,6 +368,31 @@ async function tick() {
   await Promise.all(filteredEntries().map((entry) => updateEntryNode(entry, now)));
 }
 
+async function snapshotVaultArtifacts() {
+  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY]);
+  return {
+    plain: stored[STORAGE_KEY] ?? null,
+    encrypted: stored[ENCRYPTED_KEY] ?? null
+  };
+}
+
+async function restoreVaultArtifacts(snapshot) {
+  const updates = {};
+  const removes = [];
+  if (snapshot.plain === null) {
+    removes.push(STORAGE_KEY);
+  } else {
+    updates[STORAGE_KEY] = snapshot.plain;
+  }
+  if (snapshot.encrypted === null) {
+    removes.push(ENCRYPTED_KEY);
+  } else {
+    updates[ENCRYPTED_KEY] = snapshot.encrypted;
+  }
+  if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
+  if (removes.length > 0) await chrome.storage.local.remove(removes);
+}
+
 async function saveEncryptedEntries(payloadEntries, passphrase) {
   const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
   await chrome.storage.local.set({ [ENCRYPTED_KEY]: encryptedPayload });
@@ -375,13 +400,19 @@ async function saveEncryptedEntries(payloadEntries, passphrase) {
 }
 
 async function persistEntries() {
-  if (settings.encrypt) {
-    if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
-    await saveEncryptedEntries(entries, currentPassphrase);
-    return;
+  const previousArtifacts = await snapshotVaultArtifacts();
+  try {
+    if (settings.encrypt) {
+      if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
+      await saveEncryptedEntries(entries, currentPassphrase);
+      return;
+    }
+    await chrome.storage.local.set({ [STORAGE_KEY]: entries });
+    await chrome.storage.local.remove(ENCRYPTED_KEY);
+  } catch (error) {
+    await restoreVaultArtifacts(previousArtifacts);
+    throw error;
   }
-  await chrome.storage.local.set({ [STORAGE_KEY]: entries });
-  await chrome.storage.local.remove(ENCRYPTED_KEY);
 }
 
 async function persistSettings() {
@@ -505,7 +536,11 @@ function bindEvents() {
 
   securityForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const previousSettings = { ...settings };
+    const previousPassphrase = currentPassphrase;
+    let previousArtifacts;
     try {
+      previousArtifacts = await snapshotVaultArtifacts();
       settings.encrypt = encryptToggle.checked;
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
@@ -528,6 +563,12 @@ function bindEvents() {
       lockBtn.disabled = !settings.encrypt;
       setMainStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
     } catch (error) {
+      settings = previousSettings;
+      currentPassphrase = previousPassphrase;
+      if (previousArtifacts) await restoreVaultArtifacts(previousArtifacts);
+      encryptToggle.checked = settings.encrypt;
+      passphraseFields.classList.toggle("hidden", !settings.encrypt);
+      lockBtn.disabled = !settings.encrypt;
       reportError("Extension save security failed", error);
       setMainStatus(toUserMessage(error, "Could not save security settings"), "error");
     }
