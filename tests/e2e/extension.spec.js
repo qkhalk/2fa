@@ -314,3 +314,48 @@ test("extension removes individual entries with destructive actions", async () =
     await context.close();
   }
 });
+
+test("extension preserves entries when encrypted entry removal persistence fails", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-remove-fail-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Survivor:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#encrypt-toggle").check();
+    await page.locator("#passphrase").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").press("Enter");
+    await expect(page.locator("#status")).toContainText("Encrypted extension vault saved");
+
+    await page.evaluate(() => {
+      const originalRemove = chrome.storage.local.remove.bind(chrome.storage.local);
+      chrome.storage.local.remove = async (keys) => {
+        throw new Error("Simulated extension remove failure");
+      };
+    });
+
+    await page.locator(".entry-card").first().getByRole("button", { name: "x" }).click();
+    await expect(page.locator("#status")).toContainText("Simulated extension remove failure");
+    await expect(page.locator(".entry-card")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
