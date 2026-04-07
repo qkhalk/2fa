@@ -198,3 +198,43 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
   await expect(page.locator(".entry")).toHaveCount(1);
 });
+
+test("keeps web settings and storage mode unchanged when encrypted save fails", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.addInitScript(() => {
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === "personal_otp_vault_persist_warning_seen_v1") {
+        return originalSetItem.call(this, key, value);
+      }
+      if (key === "personal_otp_vault_encrypted_v1") {
+        throw new Error("Simulated encrypted storage failure");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  });
+  await page.reload();
+  await page.evaluate(() => {
+    localStorage.setItem("personal_otp_vault_persist_warning_seen_v1", "true");
+  });
+  await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+
+  await expect(page.locator("#settings-status")).toContainText("Simulated encrypted storage failure");
+  await expect(page.locator("#persist-toggle")).not.toBeChecked();
+  await expect(page.locator("#encrypt-toggle")).not.toBeChecked();
+  await expect(page.locator("#summary-storage")).toHaveText("Session");
+  await expect(page.locator("#unlock-panel")).toBeHidden();
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_settings_v3"))).toBeNull();
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_encrypted_v1"))).toBeNull();
+});

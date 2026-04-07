@@ -1293,20 +1293,36 @@ async function handleSaveSettings() {
   } else {
     nextPassphrase = "";
   }
+  const previousSettings = { ...settings };
+  const previousPassphrase = currentPassphrase;
+  const previousStoredSettings = localStorage.getItem(SETTINGS_KEY);
   settings = nextSettings;
   currentPassphrase = nextPassphrase;
-  saveSettings();
   syncSettingsUI();
   applyVisualSettings();
-  if (!settings.persist) {
-    clearPersistedEntries();
-    setLocked(false);
-    setSettingsStatus("Entries are now session-only", "success");
-    vaultPassphraseInput.value = "";
-    vaultPassphraseConfirmInput.value = "";
-    return;
+  try {
+    saveSettings();
+    if (!settings.persist) {
+      clearPersistedEntries();
+      setLocked(false);
+      setSettingsStatus("Entries are now session-only", "success");
+      vaultPassphraseInput.value = "";
+      vaultPassphraseConfirmInput.value = "";
+      return;
+    }
+    await persistEntries();
+  } catch (error) {
+    settings = previousSettings;
+    currentPassphrase = previousPassphrase;
+    if (previousStoredSettings === null) {
+      localStorage.removeItem(SETTINGS_KEY);
+    } else {
+      localStorage.setItem(SETTINGS_KEY, previousStoredSettings);
+    }
+    syncSettingsUI();
+    applyVisualSettings();
+    throw error;
   }
-  await persistEntries();
   setLocked(false);
   setSettingsStatus(settings.encrypt ? "Encrypted vault saved" : "Device storage updated", "success");
   vaultPassphraseInput.value = "";
