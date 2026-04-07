@@ -291,3 +291,93 @@ test("removes partial encrypted artifacts when cleanup fails after encrypted wri
   await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_entries_v2"))).not.toBeNull();
   await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_encrypted_v1"))).toBeNull();
 });
+
+test("rolls back entries and passphrase when encrypted backup import persistence fails", async ({ page }) => {
+  await page.addInitScript(({ fixedNow, secret, passphrase }) => {
+    const RealDate = Date;
+    class MockDate extends RealDate {
+      constructor(...args) { super(...(args.length === 0 ? [fixedNow] : args)); }
+      static now() { return fixedNow; }
+    }
+    Object.setPrototypeOf(MockDate, RealDate);
+    window.Date = MockDate;
+
+    localStorage.setItem("personal_otp_vault_settings_v3", JSON.stringify({
+      persist: true,
+      encrypt: true,
+      unlockOnLoad: true,
+      blurCodes: false,
+      screenshotSafe: false,
+      clearClipboard: false,
+      sortBy: "pinned-alpha",
+      groupBy: "none",
+    }));
+    localStorage.setItem("personal_otp_vault_persist_warning_seen_v1", "true");
+
+    window.__blockNextEncryptedWrite = false;
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) {
+      if (key === "personal_otp_vault_encrypted_v1" && window.__blockNextEncryptedWrite) {
+        window.__blockNextEncryptedWrite = false;
+        throw new Error("Simulated persistence failure during import");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  }, { fixedNow: FIXED_NOW, secret: PRIMARY_SECRET, passphrase: PASSPHRASE });
+
+  await page.goto("/");
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+  await page.locator("#unlock-passphrase").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Unlock Vault" }).click();
+  await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
+
+  await addEntry(page, { label: "Original:user@example.com", secret: PRIMARY_SECRET });
+  await expect(page.locator(".entry")).toHaveCount(1);
+
+  const originalDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Backup" }).click();
+  const originalDownload = await originalDownloadPromise;
+  const originalBackup = await readFile(await originalDownload.path());
+
+  await page.evaluate(() => { window.__blockNextEncryptedWrite = true; });
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "encrypted-backup.json",
+    mimeType: "application/json",
+    buffer: originalBackup,
+  });
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await page.locator("#backup-import-passphrase").fill(PASSPHRASE);
+  await page.locator("#confirm-backup-import").click();
+
+  await expect(page.locator("#settings-status")).toContainText("Simulated persistence failure during import");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Original");
+
+  await page.locator("#backup-review-dialog").press("Escape");
+  await expect(page.locator("#backup-review-dialog")).toBeHidden();
+
+  const verifyDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Backup" }).click();
+  const verifyDownload = await verifyDownloadPromise;
+  const verifyBackup = await readFile(await verifyDownload.path());
+
+  const verifyBackupParsed = JSON.parse(new TextDecoder().decode(verifyBackup));
+  expect(verifyBackupParsed.encrypted).toBe(true);
+
+  await page.getByRole("button", { name: "Clear All" }).click();
+  await expect(page.locator(".entry")).toHaveCount(0);
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "verify-backup.json",
+    mimeType: "application/json",
+    buffer: verifyBackup,
+  });
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await page.locator("#backup-import-passphrase").fill(PASSPHRASE);
+  await page.locator("#confirm-backup-import").click();
+
+  await expect(page.locator("#settings-status")).toContainText("Backup imported");
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Original");
+});

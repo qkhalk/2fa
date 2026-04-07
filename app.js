@@ -1412,11 +1412,17 @@ async function importBackupFile(file, backup = null) {
     const passphrase = backupImportPassphraseInput?.value.trim() || window.prompt("Backup is encrypted. Enter the backup passphrase:");
     if (!passphrase) throw new Error("Backup import cancelled");
     const decrypted = await decryptVaultEntries(resolvedBackup.vault, passphrase);
+    const previousPassphrase = currentPassphrase;
     if (settings.encrypt) {
       currentPassphrase = normalizePassphrase(passphrase);
     }
     const nextEntries2 = mode === "replace" ? decrypted : [...entries, ...decrypted.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
-    await replaceEntries(nextEntries2);
+    try {
+      await replaceEntries(nextEntries2);
+    } catch (error) {
+      currentPassphrase = previousPassphrase;
+      throw error;
+    }
     return;
   }
   const nextEntries = mode === "replace" ? resolvedBackup.entries : [...entries, ...resolvedBackup.entries.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
