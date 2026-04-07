@@ -1496,7 +1496,7 @@ async function startCameraScan() {
       return;
     }
     if (!registerCameraDetection(otpUri)) {
-      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "success");
+      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "warning");
       return;
     }
     try {
@@ -1631,7 +1631,7 @@ function bindEvents() {
     try {
       setImportStatus("Starting camera...");
       await startCameraScan();
-      setImportStatus("Camera ready. Hold a QR code in front of it.", "success");
+      setImportStatus("Camera ready. Hold a QR code in front of it.", "");
     } catch (error) {
       reportError("Camera start failed", error);
       setImportStatus(toUserMessage(error, "Could not start camera"), "error");
