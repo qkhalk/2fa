@@ -714,6 +714,24 @@ function loadPlainEntries() {
 function savePlainEntries() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
 }
+function snapshotPersistedVaultArtifacts() {
+  return {
+    plainEntries: localStorage.getItem(STORAGE_KEY),
+    encryptedEntries: localStorage.getItem(ENCRYPTED_VAULT_KEY)
+  };
+}
+function restorePersistedVaultArtifacts(snapshot) {
+  if (snapshot.plainEntries === null) {
+    localStorage.removeItem(STORAGE_KEY);
+  } else {
+    localStorage.setItem(STORAGE_KEY, snapshot.plainEntries);
+  }
+  if (snapshot.encryptedEntries === null) {
+    localStorage.removeItem(ENCRYPTED_VAULT_KEY);
+  } else {
+    localStorage.setItem(ENCRYPTED_VAULT_KEY, snapshot.encryptedEntries);
+  }
+}
 function clearPersistedEntries() {
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(ENCRYPTED_VAULT_KEY);
@@ -1088,20 +1106,26 @@ async function decryptStoredEntries(passphrase) {
   return decryptVaultEntries(payload, passphrase);
 }
 async function persistEntries() {
-  if (!settings.persist) {
-    clearPersistedEntries();
-    return;
-  }
-  if (settings.encrypt) {
-    if (!currentPassphrase) {
-      throw new Error("Unlock or set a passphrase before saving encrypted entries");
+  const previousArtifacts = snapshotPersistedVaultArtifacts();
+  try {
+    if (!settings.persist) {
+      clearPersistedEntries();
+      return;
     }
-    await saveEncryptedEntries(entries, currentPassphrase);
-    localStorage.removeItem(STORAGE_KEY);
-    return;
+    if (settings.encrypt) {
+      if (!currentPassphrase) {
+        throw new Error("Unlock or set a passphrase before saving encrypted entries");
+      }
+      await saveEncryptedEntries(entries, currentPassphrase);
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    savePlainEntries();
+    localStorage.removeItem(ENCRYPTED_VAULT_KEY);
+  } catch (error) {
+    restorePersistedVaultArtifacts(previousArtifacts);
+    throw error;
   }
-  savePlainEntries();
-  localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 async function replaceEntries(nextEntries) {
   const previousEntries = entries;
