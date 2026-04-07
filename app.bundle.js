@@ -1,4 +1,4 @@
-// lib/otp.js
+// app.js
 var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
@@ -208,7 +208,6 @@ function compareEntries(a, b, sortBy = "pinned-alpha") {
   if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
 }
-
 function nextOrderValue(items = entries) {
   if (items.length === 0) return 1;
   return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
@@ -262,8 +261,6 @@ function formatCode(code) {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
 }
-
-// lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 var BACKUP_VERSION = 2;
@@ -455,8 +452,6 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
     entries: entries2
   };
 }
-
-// app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
@@ -611,7 +606,6 @@ function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
   document.body.classList.toggle("screenshot-safe", settings.screenshotSafe);
 }
-
 function renderWorkspaceSummary() {
   if (!summaryTotal) return;
   const groups = getEntryGroups().filter(([, groupEntries]) => groupEntries.length > 0);
@@ -620,7 +614,6 @@ function renderWorkspaceSummary() {
   summaryGroups.textContent = String(settings.groupBy === "none" ? 1 : Math.max(groups.length, 0));
   summaryStorage.textContent = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
 }
-
 function renderConnectionState() {
   if (!offlineChip) return;
   const online = navigator.onLine !== false;
@@ -781,14 +774,12 @@ function renderBulkBar() {
   bulkBar.classList.toggle("hidden", selectedCount === 0);
   bulkSummary.textContent = `${selectedCount} selected`;
 }
-
 function resequenceEntries(items) {
   return items.map((entry, index) => ({
     ...entry,
     order: index + 1
   }));
 }
-
 function openEditEntryDialog(entry) {
   if (!editEntryDialog) return;
   editEntryIdInput.value = entry.id;
@@ -800,7 +791,6 @@ function openEditEntryDialog(entry) {
   setStatus(editEntryStatus, "");
   editEntryDialog.showModal();
 }
-
 async function saveEditedEntry() {
   const id = editEntryIdInput.value;
   const current = entries.find((entry) => entry.id === id);
@@ -819,7 +809,6 @@ async function saveEditedEntry() {
   }
   await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
 }
-
 async function moveEntry(entryId, direction) {
   const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
   const index = ordered.findIndex((entry) => entry.id === entryId);
@@ -911,11 +900,9 @@ function createEntryNode(entry) {
       setImportStatus(toUserMessage(error, "Could not copy OTP to clipboard"), "error");
     }
   };
-
   editBtn.onclick = () => {
     openEditEntryDialog(entry);
   };
-
   moveUpBtn.onclick = async () => {
     try {
       settings.sortBy = "custom";
@@ -928,7 +915,6 @@ function createEntryNode(entry) {
       setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
     }
   };
-
   moveDownBtn.onclick = async () => {
     try {
       settings.sortBy = "custom";
@@ -1135,11 +1121,9 @@ async function addEntry(input) {
   await replaceEntries([...entries, entry]);
   return entry;
 }
-
 function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   const unique = [];
-  const seen = new Set();
-
+  const seen = /* @__PURE__ */ new Set();
   for (const uri of uris) {
     try {
       const entry = parseOtpAuthUri(uri);
@@ -1151,18 +1135,14 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
       continue;
     }
   }
-
   if (unique.length === 0) throw new Error(`No new entries found from ${sourceLabel}`);
   return unique;
 }
-
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
-
   importPreviewTitle.textContent = `Review ${importPreviewState.candidates.length} candidate${importPreviewState.candidates.length === 1 ? "" : "s"}`;
   importPreviewStatus.textContent = `${importPreviewState.sourceLabel}: only valid, non-duplicate entries are shown below.`;
   importPreviewList.innerHTML = "";
-
   importPreviewState.candidates.forEach((entry, index) => {
     const row = document.createElement("article");
     row.className = "preview-item";
@@ -1180,19 +1160,17 @@ function renderImportPreview() {
         <span>Tags</span>
         <input type="text" class="preview-tags" value="${(entry.tags || []).join(", ")}" placeholder="project, hardware-key">
       </label>
-      <p>${entry.digits} digits • ${entry.period}s</p>
+      <p>${entry.digits} digits \u2022 ${entry.period}s</p>
     `;
     importPreviewList.appendChild(row);
   });
 }
-
 function openImportPreview(candidates, sourceLabel) {
   importPreviewState = { candidates, sourceLabel };
   if (importPreviewTagsInput) importPreviewTagsInput.value = "";
   renderImportPreview();
   importDialog?.showModal?.();
 }
-
 async function commitImportPreview(previewState = importPreviewState) {
   if (!previewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
@@ -1207,24 +1185,16 @@ async function commitImportPreview(previewState = importPreviewState) {
       ...baseEntry,
       label: row.querySelector(".preview-label")?.value.trim() || baseEntry.label,
       tags: normalizeTags([
-        ...(baseEntry.tags || []),
+        ...baseEntry.tags || [],
         ...normalizeTags(row.querySelector(".preview-tags")?.value),
-        ...extraTags,
+        ...extraTags
       ]),
-      order: nextOrder++,
+      order: nextOrder++
     }];
   });
   if (enriched.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...enriched]);
   setImportStatus(`${previewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
-}
-async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
-  const parsed = normalizeEntry({ ...parseOtpAuthUri(otpUri), order: nextOrderValue() });
-  if (hasDuplicateEntry(entries, parsed)) {
-    throw new Error("This account already exists");
-  }
-  await replaceEntries([...entries, parsed]);
-  setImportStatus(`${sourceLabel}: account imported`, "success");
 }
 async function decodeQrFromBlob(blob) {
   if (typeof window.jsQR !== "function") {
@@ -1717,7 +1687,6 @@ function bindEvents() {
   importDialog?.addEventListener("close", () => {
     importPreviewState = null;
   });
-
   backupReviewForm?.addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "accept") return;
     event.preventDefault();
@@ -1733,7 +1702,6 @@ function bindEvents() {
   backupReviewDialog?.addEventListener("close", () => {
     backupImportState = null;
   });
-
   editEntryForm?.addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "accept") return;
     event.preventDefault();

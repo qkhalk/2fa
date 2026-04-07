@@ -1,3 +1,23 @@
+import {
+  extractOtpAuthUri,
+  formatCode,
+  generateTotp,
+  getIssuerInitials,
+  hasDuplicateEntry,
+  normalizeEntries,
+  normalizeEntry,
+  normalizeTags,
+  parseLabelParts,
+  parseOtpAuthUri,
+  reportError,
+  toUserMessage,
+} from "../lib/otp.js";
+import {
+  decryptVaultEntries,
+  encryptEntries,
+  normalizePassphrase,
+} from "../lib/vault.js";
+
 const STORAGE_KEY = "otp_extension_entries_v2";
 const ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 const SETTINGS_KEY = "otp_extension_settings_v1";
@@ -6,10 +26,12 @@ const UI_KEY = "otp_extension_ui_v1";
 const form = document.getElementById("entry-form");
 const labelInput = document.getElementById("label");
 const secretInput = document.getElementById("secret");
+const tagsInput = document.getElementById("tags");
 const digitsInput = document.getElementById("digits");
 const periodInput = document.getElementById("period");
 const qrFileInput = document.getElementById("qr-file");
 const searchInput = document.getElementById("search");
+const sortSelect = document.getElementById("sort-select");
 const pasteUriBtn = document.getElementById("paste-uri");
 const toggleFormBtn = document.getElementById("toggle-form");
 const lockBtn = document.getElementById("lock-btn");
@@ -27,44 +49,52 @@ const passphraseFields = document.getElementById("passphrase-fields");
 const passphraseInput = document.getElementById("passphrase");
 const passphraseConfirmInput = document.getElementById("passphrase-confirm");
 const saveSecurityBtn = document.getElementById("save-security");
+const copyHistoryRoot = document.getElementById("copy-history");
+const unlockForm = document.getElementById("unlock-form");
+const securityForm = document.getElementById("security-form");
+const editEntryForm = document.getElementById("edit-entry-form");
+const editEntryDialog = document.getElementById("edit-entry-dialog");
+const editEntryIdInput = document.getElementById("edit-entry-id");
+const editLabelInput = document.getElementById("edit-label");
+const editSecretInput = document.getElementById("edit-secret");
+const editTagsInput = document.getElementById("edit-tags");
+const editDigitsInput = document.getElementById("edit-digits");
+const editPeriodInput = document.getElementById("edit-period");
+const editStatus = document.getElementById("edit-status");
+const cancelEditBtn = document.getElementById("cancel-edit");
+const saveEditBtn = document.getElementById("save-edit");
 
 let entries = [];
 let entryNodes = new Map();
 let collapsed = false;
-let settings = { encrypt: false };
+let settings = { encrypt: false, sortBy: "alpha" };
 let currentPassphrase = "";
+let copyHistory = [];
 
 initialize();
 
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
-  settings = { encrypt: false, ...(stored[SETTINGS_KEY] || {}) };
+  settings = { encrypt: false, sortBy: "alpha", ...(stored[SETTINGS_KEY] || {}) };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
+  sortSelect.value = settings.sortBy || "alpha";
   passphraseFields.classList.toggle("hidden", !settings.encrypt);
   applyUiState();
 
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
     setLocked(true);
   } else {
-    entries = Array.isArray(stored[STORAGE_KEY]) ? stored[STORAGE_KEY].map(normalizeEntry) : [];
+    entries = normalizeEntries(stored[STORAGE_KEY]);
+    if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
     setLocked(false);
   }
 
   bindEvents();
   renderEntries();
+  renderCopyHistory();
   tick();
   setInterval(tick, 1000);
-}
-
-function normalizeEntry(entry) {
-  return {
-    id: entry.id || `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    label: (entry.label || "Manual Entry").trim() || "Manual Entry",
-    secret: sanitizeBase32(entry.secret || ""),
-    digits: entry.digits === 8 ? 8 : 6,
-    period: Math.max(15, Math.min(120, Number(entry.period) || 30)),
-  };
 }
 
 function applyUiState() {
@@ -76,16 +106,18 @@ async function saveUiState() {
   await chrome.storage.local.set({ [UI_KEY]: { collapsed } });
 }
 
-function setStatus(message, tone = "") {
-  statusNode.textContent = message;
-  statusNode.classList.remove("error", "success");
-  if (tone) statusNode.classList.add(tone);
+function setStatus(node, message, tone = "") {
+  node.textContent = message;
+  node.classList.remove("error", "success");
+  if (tone) node.classList.add(tone);
+}
+
+function setMainStatus(message, tone = "") {
+  setStatus(statusNode, message, tone);
 }
 
 function setUnlockStatus(message, tone = "") {
-  unlockStatus.textContent = message;
-  unlockStatus.classList.remove("error", "success");
-  if (tone) unlockStatus.classList.add(tone);
+  setStatus(unlockStatus, message, tone);
 }
 
 function setLocked(locked) {
@@ -95,124 +127,180 @@ function setLocked(locked) {
   });
   qrFileInput.disabled = locked;
   searchInput.disabled = locked;
+  sortSelect.disabled = locked;
   pasteUriBtn.disabled = locked;
   lockBtn.disabled = locked || !settings.encrypt;
 }
 
-function sanitizeBase32(value) {
-  return value.toUpperCase().replace(/\s+/g, "").replace(/=+$/g, "");
-}
-
-function parseLabelParts(label) {
-  const clean = (label || "").trim();
-  if (!clean) return { issuer: "Unknown", account: "No account label" };
-  if (clean.includes(":")) {
-    const [issuer, ...rest] = clean.split(":");
-    return { issuer: issuer.trim() || clean, account: rest.join(":").trim() || "No account label" };
+function sortEntries(items) {
+  const sorted = [...items];
+  if (settings.sortBy === "custom") {
+    return sorted.sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
   }
-  if (clean.includes(" - ")) {
-    const [issuer, ...rest] = clean.split(" - ");
-    return { issuer: issuer.trim() || clean, account: rest.join(" - ").trim() || "No account label" };
+  if (settings.sortBy === "recent") {
+    return sorted.sort((left, right) => right.createdAt - left.createdAt);
   }
-  return { issuer: clean, account: "No account label" };
-}
-
-function getInitials(label) {
-  const issuer = parseLabelParts(label).issuer;
-  const parts = issuer.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "OT";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
-function toCounterBytes(counter) {
-  const bytes = new Uint8Array(8);
-  let temp = BigInt(counter);
-  for (let i = 7; i >= 0; i -= 1) {
-    bytes[i] = Number(temp & 0xffn);
-    temp >>= 8n;
+  if (settings.sortBy === "period") {
+    return sorted.sort((left, right) => left.period - right.period || left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
   }
-  return bytes;
-}
-
-function base32ToBytes(base32) {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const clean = sanitizeBase32(base32);
-  let bits = "";
-  for (const char of clean) {
-    const idx = alphabet.indexOf(char);
-    if (idx === -1) throw new Error("Invalid Base32 secret");
-    bits += idx.toString(2).padStart(5, "0");
-  }
-  const bytes = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
-  return new Uint8Array(bytes);
-}
-
-async function hmacSha1(keyBytes, msgBytes) {
-  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
-  const sig = await crypto.subtle.sign("HMAC", key, msgBytes);
-  return new Uint8Array(sig);
-}
-
-async function generateTotp(entry, now) {
-  const digest = await hmacSha1(base32ToBytes(entry.secret), toCounterBytes(Math.floor(now / entry.period)));
-  const offset = digest[digest.length - 1] & 0x0f;
-  const binary = ((digest[offset] & 0x7f) << 24)
-    | (digest[offset + 1] << 16)
-    | (digest[offset + 2] << 8)
-    | digest[offset + 3];
-  return (binary % (10 ** entry.digits)).toString().padStart(entry.digits, "0");
-}
-
-function formatCode(code) {
-  return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : `${code.slice(0, 4)} ${code.slice(4)}`;
-}
-
-function parseOtpAuthUri(uri) {
-  const parsed = new URL(uri);
-  return normalizeEntry({
-    label: decodeURIComponent(parsed.pathname.replace(/^\//, "")) || "Imported",
-    secret: parsed.searchParams.get("secret") || "",
-    digits: Number(parsed.searchParams.get("digits") || 6),
-    period: Number(parsed.searchParams.get("period") || 30),
-  });
-}
-
-function findOtpUri(text) {
-  const match = (text || "").trim().match(/otpauth:\/\/[^\s"']+/i);
-  return match ? match[0] : "";
+  return sorted.sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
 }
 
 function filteredEntries() {
-  const q = (searchInput.value || "").trim().toLowerCase();
-  return [...entries]
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }))
-    .filter((entry) => entry.label.toLowerCase().includes(q));
+  const query = (searchInput.value || "").trim().toLowerCase();
+  return sortEntries(entries).filter((entry) => (
+    [entry.label, ...(entry.tags || [])].join(" ").toLowerCase().includes(query)
+  ));
 }
 
-function createEntryNode(entry) {
-  const node = template.content.firstElementChild.cloneNode(true);
+function refreshEntryNode(node, entry) {
   const parts = parseLabelParts(entry.label);
-
-  node.querySelector(".avatar").textContent = getInitials(entry.label);
+  node.querySelector(".avatar").textContent = getIssuerInitials(entry.label);
   node.querySelector(".issuer").textContent = parts.issuer;
   node.querySelector(".account").textContent = parts.account;
   node.querySelector(".meta").textContent = `${entry.digits} digits • ${entry.period}s`;
 
+  const tagRoot = node.querySelector(".tags");
+  tagRoot.innerHTML = "";
+  for (const tag of entry.tags || []) {
+    const chip = document.createElement("span");
+    chip.className = "tag";
+    chip.textContent = tag;
+    tagRoot.appendChild(chip);
+  }
+}
+
+function addCopyHistory(label, code) {
+  copyHistory = [
+    {
+      label,
+      code: formatCode(code),
+      at: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    },
+    ...copyHistory.filter((item) => item.label !== label),
+  ].slice(0, 5);
+  renderCopyHistory();
+}
+
+function renderCopyHistory() {
+  if (!copyHistoryRoot) return;
+  if (copyHistory.length === 0) {
+    copyHistoryRoot.innerHTML = '<div class="empty-state">Copied OTPs will appear here.</div>';
+    return;
+  }
+
+  copyHistoryRoot.innerHTML = copyHistory
+    .map((item) => `<div class="history-item"><strong>${item.label}</strong><span>${item.code} • ${item.at}</span></div>`)
+    .join("");
+}
+
+function nextOrderValue(items = entries) {
+  if (items.length === 0) return 1;
+  return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
+}
+
+function resequenceEntries(items) {
+  return items.map((entry, index) => ({ ...entry, order: index + 1 }));
+}
+
+function openEditEntryDialog(entry) {
+  if (!editEntryDialog?.showModal) return;
+  editEntryIdInput.value = entry.id;
+  editLabelInput.value = entry.label;
+  editSecretInput.value = entry.secret;
+  editTagsInput.value = (entry.tags || []).join(", ");
+  editDigitsInput.value = String(entry.digits);
+  editPeriodInput.value = String(entry.period);
+  setStatus(editStatus, "");
+  editEntryDialog.showModal();
+}
+
+async function saveEditedEntry() {
+  const id = editEntryIdInput.value;
+  const current = entries.find((entry) => entry.id === id);
+  if (!current) throw new Error("Entry no longer exists");
+
+  const updated = normalizeEntry({
+    ...current,
+    label: editLabelInput.value,
+    secret: editSecretInput.value,
+    tags: normalizeTags(editTagsInput.value),
+    digits: Number(editDigitsInput.value),
+    period: Number(editPeriodInput.value),
+    order: current.order,
+  });
+
+  if (entries.some((entry) => entry.id !== id && entry.secret === updated.secret && entry.digits === updated.digits && entry.period === updated.period)) {
+    throw new Error("Another entry already uses this secret, digits, and period");
+  }
+
+  await replaceEntries(entries.map((entry) => (entry.id === id ? updated : entry)));
+}
+
+async function moveEntry(entryId, direction) {
+  const ordered = sortEntries(entries);
+  const index = ordered.findIndex((entry) => entry.id === entryId);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return;
+  [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+  await replaceEntries(resequenceEntries(ordered));
+}
+
+function createEntryNode(entry) {
+  const node = template.content.firstElementChild.cloneNode(true);
+  refreshEntryNode(node, entry);
+
   node.querySelector(".copy").addEventListener("click", async () => {
-    const otp = node.dataset.otp;
-    if (!otp) return;
-    await navigator.clipboard.writeText(otp);
-    setStatus(`Copied ${parts.issuer} code`, "success");
+    try {
+      const otp = node.dataset.otp;
+      if (!otp) return;
+      await navigator.clipboard.writeText(otp);
+      addCopyHistory(entry.label, otp);
+      setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
+    } catch (error) {
+      reportError("Extension copy failed", error);
+      setMainStatus(toUserMessage(error, "Could not copy OTP"), "error");
+    }
+  });
+
+  node.querySelector(".edit")?.addEventListener("click", () => {
+    openEditEntryDialog(entry);
+  });
+
+  node.querySelector(".move-up")?.addEventListener("click", async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      await persistSettings();
+      await moveEntry(entry.id, -1);
+      setMainStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Extension move up failed", error);
+      setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
+    }
+  });
+
+  node.querySelector(".move-down")?.addEventListener("click", async () => {
+    try {
+      settings.sortBy = "custom";
+      sortSelect.value = "custom";
+      await persistSettings();
+      await moveEntry(entry.id, 1);
+      setMainStatus("Manual order updated", "success");
+    } catch (error) {
+      reportError("Extension move down failed", error);
+      setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
+    }
   });
 
   node.querySelector(".remove").addEventListener("click", async () => {
-    entries = entries.filter((item) => item.id !== entry.id);
-    await persistEntries();
-    renderEntries();
-    tick();
-    setStatus(`Removed ${parts.issuer}`);
+    try {
+      await replaceEntries(entries.filter((item) => item.id !== entry.id));
+      setMainStatus("Removed entry", "success");
+    } catch (error) {
+      reportError("Extension remove failed", error);
+      setMainStatus(toUserMessage(error, "Could not remove entry"), "error");
+    }
   });
 
   return node;
@@ -238,6 +326,7 @@ function renderEntries() {
       node = createEntryNode(entry);
       entryNodes.set(entry.id, node);
     }
+    refreshEntryNode(node, entry);
     fragment.appendChild(node);
   }
   for (const [id] of entryNodes) {
@@ -251,14 +340,16 @@ async function updateEntryNode(entry, now) {
   if (!node) return;
   try {
     const remaining = entry.period - (now % entry.period);
-    const code = await generateTotp(entry, now);
+    const code = await generateTotp(entry.secret, entry.digits, entry.period, now);
     node.dataset.otp = code;
     node.querySelector(".code").textContent = formatCode(code);
     node.querySelector(".seconds").textContent = `${remaining}s`;
     node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
     node.classList.toggle("urgent", remaining <= 10);
-  } catch {
+  } catch (error) {
+    reportError("Extension OTP generation failed", error);
     node.querySelector(".code").textContent = "Invalid";
+    node.dataset.otp = "";
   }
 }
 
@@ -277,58 +368,16 @@ async function tick() {
   await Promise.all(filteredEntries().map((entry) => updateEntryNode(entry, now)));
 }
 
-function bytesToBase64(uint8) {
-  return btoa(String.fromCharCode(...uint8));
-}
-
-function base64ToBytes(base64) {
-  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-}
-
-async function deriveVaultKey(passphrase, salt) {
-  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
-    material,
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"]
-  );
-}
-
-async function saveEncryptedEntries(passphrase) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveVaultKey(passphrase, salt);
-  const payload = new TextEncoder().encode(JSON.stringify(entries));
-  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, payload);
-  await chrome.storage.local.set({
-    [ENCRYPTED_KEY]: {
-      salt: bytesToBase64(salt),
-      iv: bytesToBase64(iv),
-      data: bytesToBase64(new Uint8Array(encrypted)),
-    },
-  });
+async function saveEncryptedEntries(payloadEntries, passphrase) {
+  const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
+  await chrome.storage.local.set({ [ENCRYPTED_KEY]: encryptedPayload });
   await chrome.storage.local.remove(STORAGE_KEY);
-}
-
-async function decryptEntries(passphrase) {
-  const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
-  const payload = stored[ENCRYPTED_KEY];
-  if (!payload) return [];
-  const key = await deriveVaultKey(passphrase, base64ToBytes(payload.salt));
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
-    key,
-    base64ToBytes(payload.data)
-  );
-  return JSON.parse(new TextDecoder().decode(decrypted)).map(normalizeEntry);
 }
 
 async function persistEntries() {
   if (settings.encrypt) {
     if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
-    await saveEncryptedEntries(currentPassphrase);
+    await saveEncryptedEntries(entries, currentPassphrase);
     return;
   }
   await chrome.storage.local.set({ [STORAGE_KEY]: entries });
@@ -339,6 +388,28 @@ async function persistSettings() {
   await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
 }
 
+async function replaceEntries(nextEntries) {
+  const previousEntries = entries;
+  entries = normalizeEntries(nextEntries);
+  if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
+  try {
+    await persistEntries();
+  } catch (error) {
+    entries = previousEntries;
+    renderEntries();
+    await tick();
+    throw error;
+  }
+  renderEntries();
+  await tick();
+}
+
+async function addEntry(input) {
+  const entry = normalizeEntry({ ...input, order: nextOrderValue() });
+  if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+  await replaceEntries([...entries, entry]);
+}
+
 async function importFromQrFile(file) {
   if (typeof BarcodeDetector !== "function") {
     throw new Error("QR file import requires Chrome BarcodeDetector support");
@@ -347,34 +418,35 @@ async function importFromQrFile(file) {
   const detector = new BarcodeDetector({ formats: ["qr_code"] });
   const results = await detector.detect(bitmap);
   bitmap.close();
-  if (!results.length || !results[0].rawValue) throw new Error("Could not detect a QR code in that file");
-  const uri = findOtpUri(results[0].rawValue);
-  if (!uri) throw new Error("QR file does not contain an otpauth URI");
-  return parseOtpAuthUri(uri);
+  if (!results.length || !results[0].rawValue) {
+    throw new Error("Could not detect a QR code in that file");
+  }
+  const uri = extractOtpAuthUri(results[0].rawValue);
+  if (!uri) {
+    throw new Error("QR code was detected but does not contain a valid OTP URI");
+  }
+  return normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
 }
 
 function bindEvents() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      const entry = normalizeEntry({
+      await addEntry({
         label: labelInput.value,
         secret: secretInput.value,
+        tags: normalizeTags(tagsInput.value),
         digits: Number(digitsInput.value),
         period: Number(periodInput.value),
       });
-      const duplicate = entries.some((item) => item.secret === entry.secret && item.digits === entry.digits && item.period === entry.period);
-      if (duplicate) throw new Error("This entry already exists");
-      entries.push(entry);
-      await persistEntries();
       form.reset();
+      tagsInput.value = "";
       digitsInput.value = "6";
       periodInput.value = "30";
-      renderEntries();
-      tick();
-      setStatus("Entry added", "success");
+      setMainStatus("Entry added", "success");
     } catch (error) {
-      setStatus(error.message || "Could not add entry", "error");
+      reportError("Extension manual entry failed", error);
+      setMainStatus(toUserMessage(error, "Could not add entry"), "error");
     }
   });
 
@@ -383,15 +455,12 @@ function bindEvents() {
     if (!file) return;
     try {
       const entry = await importFromQrFile(file);
-      const duplicate = entries.some((item) => item.secret === entry.secret && item.digits === entry.digits && item.period === entry.period);
-      if (duplicate) throw new Error("This entry already exists");
-      entries.push(entry);
-      await persistEntries();
-      renderEntries();
-      tick();
-      setStatus("Imported QR entry", "success");
+      if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+      await replaceEntries([...entries, entry]);
+      setMainStatus("Imported QR entry", "success");
     } catch (error) {
-      setStatus(error.message || "Could not import QR file", "error");
+      reportError("Extension QR import failed", error);
+      setMainStatus(toUserMessage(error, "Could not import QR file"), "error");
     } finally {
       qrFileInput.value = "";
     }
@@ -400,22 +469,26 @@ function bindEvents() {
   pasteUriBtn.addEventListener("click", async () => {
     try {
       const text = await navigator.clipboard.readText();
-      const uri = findOtpUri(text);
-      if (!uri) throw new Error("Clipboard does not contain an otpauth URI");
-      const entry = parseOtpAuthUri(uri);
-      const duplicate = entries.some((item) => item.secret === entry.secret && item.digits === entry.digits && item.period === entry.period);
-      if (duplicate) throw new Error("This entry already exists");
-      entries.push(entry);
-      await persistEntries();
-      renderEntries();
-      tick();
-      setStatus("Imported URI from clipboard", "success");
+      const uri = extractOtpAuthUri(text);
+      if (!uri) throw new Error("Clipboard does not contain a valid OTP URI");
+      const entry = normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
+      if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+      await replaceEntries([...entries, entry]);
+      setMainStatus("Imported URI from clipboard", "success");
     } catch (error) {
-      setStatus(error.message || "Could not import URI", "error");
+      reportError("Extension clipboard import failed", error);
+      setMainStatus(toUserMessage(error, "Could not import URI"), "error");
     }
   });
 
   searchInput.addEventListener("input", () => {
+    renderEntries();
+    tick();
+  });
+
+  sortSelect.addEventListener("change", async () => {
+    settings.sortBy = sortSelect.value;
+    await persistSettings();
     renderEntries();
     tick();
   });
@@ -430,7 +503,8 @@ function bindEvents() {
     passphraseFields.classList.toggle("hidden", !encryptToggle.checked);
   });
 
-  saveSecurityBtn.addEventListener("click", async () => {
+  securityForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
       settings.encrypt = encryptToggle.checked;
       if (settings.encrypt) {
@@ -438,12 +512,11 @@ function bindEvents() {
         if (!nextPassphrase) {
           const first = passphraseInput.value.trim();
           const second = passphraseConfirmInput.value.trim();
-          if (first.length < 8) throw new Error("Use at least 8 characters for the passphrase");
           if (first !== second) throw new Error("Passphrase confirmation does not match");
-          nextPassphrase = first;
+          nextPassphrase = normalizePassphrase(first);
         }
         currentPassphrase = nextPassphrase;
-        await saveEncryptedEntries(currentPassphrase);
+        await saveEncryptedEntries(entries, currentPassphrase);
       } else {
         currentPassphrase = "";
         await chrome.storage.local.set({ [STORAGE_KEY]: entries });
@@ -453,15 +526,16 @@ function bindEvents() {
       passphraseInput.value = "";
       passphraseConfirmInput.value = "";
       lockBtn.disabled = !settings.encrypt;
-      setStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
+      setMainStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
     } catch (error) {
-      setStatus(error.message || "Could not save security settings", "error");
+      reportError("Extension save security failed", error);
+      setMainStatus(toUserMessage(error, "Could not save security settings"), "error");
     }
   });
 
   lockBtn.addEventListener("click", () => {
     if (!settings.encrypt) {
-      setStatus("Enable encrypted storage first", "error");
+      setMainStatus("Enable encrypted storage first", "error");
       return;
     }
     entries = [];
@@ -469,18 +543,37 @@ function bindEvents() {
     renderEntries();
   });
 
-  unlockBtn.addEventListener("click", async () => {
+  unlockForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
     try {
-      entries = await decryptEntries(unlockPassphraseInput.value);
-      currentPassphrase = unlockPassphraseInput.value;
+      const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+      const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
+      entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+      currentPassphrase = normalizePassphrase(unlockPassphraseInput.value);
       unlockPassphraseInput.value = "";
       setLocked(false);
       renderEntries();
       tick();
       setUnlockStatus("Vault unlocked", "success");
-      setStatus("Encrypted extension unlocked", "success");
-    } catch {
-      setUnlockStatus("Incorrect passphrase or unreadable encrypted data", "error");
+      setMainStatus("Encrypted extension unlocked", "success");
+    } catch (error) {
+      reportError("Extension unlock failed", error);
+      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data"), "error");
+    }
+  });
+
+  cancelEditBtn.addEventListener("click", () => {
+    editEntryDialog.close("cancel");
+  });
+
+  editEntryForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveEditedEntry();
+      editEntryDialog.close("accept");
+      setMainStatus("Entry updated", "success");
+    } catch (error) {
+      setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
     }
   });
 }
