@@ -4,6 +4,7 @@
   "version": "0.1.1",
   "type": "module",
   "scripts": {
+    "release:prepare": "node ./scripts/prepare-release.mjs",
     "verify:version": "node ./scripts/verify-version-sync.mjs",
     "build:icons": "node ./scripts/generate-icons.mjs",
     "build": "npm run verify:version && npm run build:icons && node ./scripts/build.mjs",

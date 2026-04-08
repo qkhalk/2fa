@@ -80,6 +80,7 @@ Suggested flow:
 
 - GitHub Actions runs `.github/workflows/release.yml` automatically when `extension/manifest.json` changes on `main` or `master`.
 - `package.json` and `extension/manifest.json` must keep the same version. CI and release automation fail fast if they drift.
+- Use `npm run release:prepare -- <version>` to bump both files together before opening a release PR.
 - If the extension `version` value changes, the workflow builds the extension bundle, creates tag `extension-v<version>`, and publishes a GitHub Release.
 - The release attaches the packaged extension archive for that version.
 - You can also trigger the same workflow manually from the Actions tab.
