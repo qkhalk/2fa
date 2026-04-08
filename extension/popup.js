@@ -308,7 +308,7 @@ function createEntryNode(entry) {
 
 function renderEntries() {
   if (!unlockPanel.classList.contains("hidden")) {
-    entriesRoot.innerHTML = '<div class="empty-state">Vault is locked. Unlock to view extension codes.</div>';
+    entriesRoot.innerHTML = '<div class="empty-state">Vault is locked. Unlock to view and use your codes.</div>';
     return;
   }
 
