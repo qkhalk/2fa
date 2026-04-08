@@ -204,6 +204,7 @@
                 <span>Import Backup</span>
                 <input id="import-backup" type="file" accept="application/json">
               </label>
+              <button type="button" id="change-passphrase-btn" class="btn ghost hidden">Change Passphrase</button>
               <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
             </div>
 
@@ -218,7 +219,7 @@
           <div class="toolbar-head">
             <div>
               <p class="eyebrow">workspace</p>
-              <h2>Current Codes</h2>
+              <h2 id="workspace-heading">Current Codes</h2>
             </div>
             <div class="workspace-status">
               <div class="workspace-chip" id="offline-chip">Online</div>
@@ -333,7 +334,7 @@
         <button type="button" class="btn small copy">Copy</button>
         <button type="button" class="btn small reveal">Reveal</button>
         <button type="button" class="btn small pin">Pin</button>
-        <button type="button" class="btn small remove">Remove</button>
+        <button type="button" class="btn small remove destructive">Remove</button>
       </div>
     </article>
   </template>
@@ -425,6 +426,42 @@
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">Cancel</button>
         <button id="save-entry-edit" value="accept" class="btn primary" type="submit">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="change-passphrase-dialog" class="dialog-shell">
+    <form id="change-passphrase-form" method="dialog" class="dialog-card">
+      <p class="eyebrow">vault passphrase</p>
+      <h3>Change passphrase</h3>
+      <label>
+        <span>Current passphrase</span>
+        <input id="current-passphrase" type="password" placeholder="Enter current passphrase">
+      </label>
+      <label>
+        <span>New passphrase</span>
+        <input id="new-passphrase" type="password" placeholder="Use a new strong passphrase">
+      </label>
+      <label>
+        <span>Confirm new passphrase</span>
+        <input id="new-passphrase-confirm" type="password" placeholder="Repeat new passphrase">
+      </label>
+      <p id="change-passphrase-status" class="helper-text status-line"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">Cancel</button>
+        <button id="update-passphrase" value="accept" class="btn primary" type="submit">Update Passphrase</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog-shell">
+    <form id="confirm-form" method="dialog" class="dialog-card">
+      <p class="eyebrow">confirm destructive action</p>
+      <h3 id="confirm-title">Are you sure?</h3>
+      <p id="confirm-message" class="helper-text">This action cannot be undone.</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn primary" type="submit">Cancel</button>
+        <button id="confirm-accept" value="accept" class="btn danger" type="submit">Confirm</button>
       </div>
     </form>
   </dialog>

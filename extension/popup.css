@@ -249,6 +249,18 @@ select:focus {
   font-size: 13px;
 }
 
+.security-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.change-passphrase-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
 .toggle-row input {
   width: 16px;
   height: 16px;
@@ -343,6 +355,25 @@ select:focus {
   margin-top: 10px;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+}
+
+.entry-code-row .copy {
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 10px;
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  color: #1a0e07;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.entry-code-row .edit,
+.entry-code-row .move-up,
+.entry-code-row .move-down {
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .code {

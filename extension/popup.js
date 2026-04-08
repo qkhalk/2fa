@@ -48,6 +48,11 @@ const encryptToggle = document.getElementById("encrypt-toggle");
 const passphraseFields = document.getElementById("passphrase-fields");
 const passphraseInput = document.getElementById("passphrase");
 const passphraseConfirmInput = document.getElementById("passphrase-confirm");
+const changePassphraseBtn = document.getElementById("change-passphrase-btn");
+const changePassphraseForm = document.getElementById("change-passphrase-form");
+const currentPassphraseInput = document.getElementById("current-passphrase");
+const newPassphraseInput = document.getElementById("new-passphrase");
+const newPassphraseConfirmInput = document.getElementById("new-passphrase-confirm");
 const saveSecurityBtn = document.getElementById("save-security");
 const copyHistoryRoot = document.getElementById("copy-history");
 const unlockForm = document.getElementById("unlock-form");
@@ -120,6 +125,29 @@ function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
 }
 
+async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
+  if (!settings.encrypt) {
+    throw new Error("Enable encrypted storage before changing the extension passphrase");
+  }
+  if (!currentPassphrase) {
+    throw new Error("Unlock the extension vault before changing the passphrase");
+  }
+  if (currentPassphraseCandidate !== currentPassphrase) {
+    throw new Error("Current passphrase is incorrect");
+  }
+  if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
+    throw new Error("Passphrase confirmation does not match");
+  }
+  const previousPassphrase = currentPassphrase;
+  currentPassphrase = normalizePassphrase(nextPassphraseCandidate);
+  try {
+    await persistEntries();
+  } catch (error) {
+    currentPassphrase = previousPassphrase;
+    throw error;
+  }
+}
+
 function setLocked(locked) {
   unlockPanel.classList.toggle("hidden", !locked);
   form.querySelectorAll("input, select, button").forEach((node) => {
@@ -130,6 +158,10 @@ function setLocked(locked) {
   sortSelect.disabled = locked;
   pasteUriBtn.disabled = locked;
   lockBtn.disabled = locked || !settings.encrypt;
+  changePassphraseBtn.classList.toggle("hidden", !settings.encrypt || locked);
+  if (locked) {
+    changePassphraseForm.classList.add("hidden");
+  }
 }
 
 function sortEntries(items) {
@@ -308,7 +340,7 @@ function createEntryNode(entry) {
 
 function renderEntries() {
   if (!unlockPanel.classList.contains("hidden")) {
-    entriesRoot.innerHTML = '<div class="empty-state">Vault is locked. Unlock to view extension codes.</div>';
+    entriesRoot.innerHTML = '<div class="empty-state">Vault is locked. Unlock to view and use your codes.</div>';
     return;
   }
 
@@ -368,6 +400,31 @@ async function tick() {
   await Promise.all(filteredEntries().map((entry) => updateEntryNode(entry, now)));
 }
 
+async function snapshotVaultArtifacts() {
+  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY]);
+  return {
+    plain: stored[STORAGE_KEY] ?? null,
+    encrypted: stored[ENCRYPTED_KEY] ?? null
+  };
+}
+
+async function restoreVaultArtifacts(snapshot) {
+  const updates = {};
+  const removes = [];
+  if (snapshot.plain === null) {
+    removes.push(STORAGE_KEY);
+  } else {
+    updates[STORAGE_KEY] = snapshot.plain;
+  }
+  if (snapshot.encrypted === null) {
+    removes.push(ENCRYPTED_KEY);
+  } else {
+    updates[ENCRYPTED_KEY] = snapshot.encrypted;
+  }
+  if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
+  if (removes.length > 0) await chrome.storage.local.remove(removes);
+}
+
 async function saveEncryptedEntries(payloadEntries, passphrase) {
   const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
   await chrome.storage.local.set({ [ENCRYPTED_KEY]: encryptedPayload });
@@ -375,13 +432,19 @@ async function saveEncryptedEntries(payloadEntries, passphrase) {
 }
 
 async function persistEntries() {
-  if (settings.encrypt) {
-    if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
-    await saveEncryptedEntries(entries, currentPassphrase);
-    return;
+  const previousArtifacts = await snapshotVaultArtifacts();
+  try {
+    if (settings.encrypt) {
+      if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
+      await saveEncryptedEntries(entries, currentPassphrase);
+      return;
+    }
+    await chrome.storage.local.set({ [STORAGE_KEY]: entries });
+    await chrome.storage.local.remove(ENCRYPTED_KEY);
+  } catch (error) {
+    await restoreVaultArtifacts(previousArtifacts);
+    throw error;
   }
-  await chrome.storage.local.set({ [STORAGE_KEY]: entries });
-  await chrome.storage.local.remove(ENCRYPTED_KEY);
 }
 
 async function persistSettings() {
@@ -503,13 +566,50 @@ function bindEvents() {
     passphraseFields.classList.toggle("hidden", !encryptToggle.checked);
   });
 
-  securityForm?.addEventListener("submit", async (event) => {
+  changePassphraseBtn?.addEventListener("click", () => {
+    changePassphraseForm.classList.toggle("hidden");
+    currentPassphraseInput.value = "";
+    newPassphraseInput.value = "";
+    newPassphraseConfirmInput.value = "";
+  });
+
+  changePassphraseForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
+      await changeVaultPassphrase(
+        currentPassphraseInput.value.trim(),
+        newPassphraseInput.value.trim(),
+        newPassphraseConfirmInput.value.trim()
+      );
+      changePassphraseForm.classList.add("hidden");
+      currentPassphraseInput.value = "";
+      newPassphraseInput.value = "";
+      newPassphraseConfirmInput.value = "";
+      setMainStatus("Extension passphrase updated", "success");
+    } catch (error) {
+      reportError("Extension change passphrase failed", error);
+      setMainStatus(toUserMessage(error, "Could not update passphrase"), "error");
+    }
+  });
+
+  securityForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const previousSettings = { ...settings };
+    const previousPassphrase = currentPassphrase;
+    let previousArtifacts;
+    try {
+      previousArtifacts = await snapshotVaultArtifacts();
       settings.encrypt = encryptToggle.checked;
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {
+          if (previousSettings.encrypt) {
+            passphraseInput.value = "";
+            passphraseConfirmInput.value = "";
+            await persistSettings();
+            setMainStatus("Encrypted extension vault saved", "success");
+            return;
+          }
           const first = passphraseInput.value.trim();
           const second = passphraseConfirmInput.value.trim();
           if (first !== second) throw new Error("Passphrase confirmation does not match");
@@ -526,8 +626,16 @@ function bindEvents() {
       passphraseInput.value = "";
       passphraseConfirmInput.value = "";
       lockBtn.disabled = !settings.encrypt;
+      changePassphraseBtn.classList.toggle("hidden", !settings.encrypt || !unlockPanel.classList.contains("hidden"));
       setMainStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
     } catch (error) {
+      settings = previousSettings;
+      currentPassphrase = previousPassphrase;
+      if (previousArtifacts) await restoreVaultArtifacts(previousArtifacts);
+      encryptToggle.checked = settings.encrypt;
+      passphraseFields.classList.toggle("hidden", !settings.encrypt);
+      lockBtn.disabled = !settings.encrypt;
+      changePassphraseBtn.classList.toggle("hidden", !settings.encrypt || !unlockPanel.classList.contains("hidden"));
       reportError("Extension save security failed", error);
       setMainStatus(toUserMessage(error, "Could not save security settings"), "error");
     }

@@ -52,3 +52,48 @@ test("app shell and persisted entries remain usable offline after the first onli
   await expect(offlinePage.locator(".entry-label")).toHaveText("Offline");
   await expect(offlinePage.locator(".entry-code")).toHaveText(/\d{3} \d{3}/);
 });
+
+test("encrypted persisted vault unlocks and renders entries offline after reload", async ({ context, page }) => {
+  const PASSPHRASE = "correct horse battery";
+
+  await loadWithStableClock(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+
+  await page.locator("#secret").fill(PRIMARY_SECRET);
+  await page.locator("#label").fill("SecureOffline:user@example.com");
+  await page.getByRole("button", { name: "Save Entry" }).click();
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.locator("#save-settings").click();
+  await expect(page.locator("#privacy-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "I Understand" }).click();
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    await registration.update();
+  });
+
+  await context.setOffline(true);
+
+  const offlinePage = await context.newPage();
+  await loadWithStableClock(offlinePage);
+  await offlinePage.goto("http://127.0.0.1:4173/", { waitUntil: "domcontentloaded" });
+
+  await expect(offlinePage.locator("#offline-chip")).toContainText("Offline Ready");
+  await expect(offlinePage.locator("#unlock-panel")).toBeVisible();
+  await expect(offlinePage.locator(".entry")).toHaveCount(0);
+
+  await offlinePage.locator("#unlock-passphrase").fill(PASSPHRASE);
+  await offlinePage.getByRole("button", { name: "Unlock Vault" }).click();
+
+  await expect(offlinePage.locator("#unlock-status")).toHaveText("Vault unlocked");
+  await expect(offlinePage.locator(".entry")).toHaveCount(1);
+  await expect(offlinePage.locator(".entry-label")).toHaveText("SecureOffline");
+  await expect(offlinePage.locator(".entry-code")).toHaveText(/\d{3} \d{3}/);
+});

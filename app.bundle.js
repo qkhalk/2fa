@@ -442,12 +442,17 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
   if (!Array.isArray(payload.entries)) {
     throw new OtpVaultError("Backup entries are missing or invalid", { code: "BACKUP_ENTRIES" });
   }
+  const totalItems = payload.entries.length;
   const entries2 = normalizeEntries(payload.entries);
+  if (entries2.length === 0) {
+    throw new OtpVaultError("Backup contains invalid entries", { code: "BACKUP_ENTRIES_INVALID" });
+  }
   return {
     encrypted: false,
     integrity,
     createdAt: migrated.createdAt || null,
-    itemCount: entries2.length,
+    itemCount: totalItems,
+    invalidItemCount: totalItems - entries2.length,
     schemaVersion: payload.schemaVersion || 1,
     entries: entries2
   };
@@ -485,6 +490,7 @@ var summaryTotal = document.getElementById("summary-total");
 var summaryPinned = document.getElementById("summary-pinned");
 var summaryGroups = document.getElementById("summary-groups");
 var summaryStorage = document.getElementById("summary-storage");
+var workspaceHeading = document.getElementById("workspace-heading");
 var bulkBar = document.getElementById("bulk-bar");
 var bulkSummary = document.getElementById("bulk-summary");
 var bulkTagInput = document.getElementById("bulk-tag-input");
@@ -502,6 +508,7 @@ var clearClipboardToggle = document.getElementById("clear-clipboard-toggle");
 var encryptionFields = document.getElementById("encryption-fields");
 var vaultPassphraseInput = document.getElementById("vault-passphrase");
 var vaultPassphraseConfirmInput = document.getElementById("vault-passphrase-confirm");
+var changePassphraseBtn = document.getElementById("change-passphrase-btn");
 var saveSettingsBtn = document.getElementById("save-settings");
 var settingsStatus = document.getElementById("settings-status");
 var exportBackupBtn = document.getElementById("export-backup");
@@ -537,6 +544,18 @@ var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
 var editEntryStatus = document.getElementById("edit-entry-status");
+var changePassphraseDialog = document.getElementById("change-passphrase-dialog");
+var changePassphraseForm = document.getElementById("change-passphrase-form");
+var currentPassphraseInput = document.getElementById("current-passphrase");
+var newPassphraseInput = document.getElementById("new-passphrase");
+var newPassphraseConfirmInput = document.getElementById("new-passphrase-confirm");
+var changePassphraseStatus = document.getElementById("change-passphrase-status");
+var confirmDialog = document.getElementById("confirm-dialog");
+var confirmForm = document.getElementById("confirm-form");
+var confirmTitle = document.getElementById("confirm-title");
+var confirmMessage = document.getElementById("confirm-message");
+var confirmAcceptBtn = document.getElementById("confirm-accept");
+var confirmCallback = null;
 var debugToggleBtn = document.getElementById("debug-toggle");
 var debugPanel = document.getElementById("debug-panel");
 var debugList = document.getElementById("debug-list");
@@ -601,6 +620,11 @@ function syncSettingsUI() {
   sortSelect.value = settings.sortBy;
   groupSelect.value = settings.groupBy;
   encryptionFields.classList.toggle("hidden", !settings.encrypt);
+  const canChangePassphrase = settings.persist && settings.encrypt;
+  changePassphraseBtn?.classList.toggle("hidden", !canChangePassphrase);
+  if (lockAppBtn) {
+    lockAppBtn.classList.toggle("hidden", !settings.encrypt);
+  }
 }
 function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
@@ -612,7 +636,12 @@ function renderWorkspaceSummary() {
   summaryTotal.textContent = String(entries.length);
   summaryPinned.textContent = String(entries.filter((entry) => entry.pinned).length);
   summaryGroups.textContent = String(settings.groupBy === "none" ? 1 : Math.max(groups.length, 0));
-  summaryStorage.textContent = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+  const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
+  let storageText = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+  if (isLocked) {
+    storageText += " (Locked)";
+  }
+  summaryStorage.textContent = storageText;
 }
 function renderConnectionState() {
   if (!offlineChip) return;
@@ -640,6 +669,9 @@ function setImportStatus(message, tone = "") {
 function setSettingsStatus(message, tone = "") {
   setStatus(settingsStatus, message, tone);
   if (message) showToast(tone === "error" ? "Settings" : "Vault", message, tone || "success");
+}
+function setChangePassphraseStatus(message, tone = "") {
+  setStatus(changePassphraseStatus, message, tone);
 }
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
@@ -692,6 +724,7 @@ function setLocked(locked) {
   searchInput.disabled = locked;
   sortSelect.disabled = locked;
   groupSelect.disabled = locked;
+  changePassphraseBtn?.classList.toggle("hidden", locked || !settings.persist || !settings.encrypt);
 }
 function loadPlainEntries() {
   try {
@@ -706,6 +739,24 @@ function loadPlainEntries() {
 }
 function savePlainEntries() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+function snapshotPersistedVaultArtifacts() {
+  return {
+    plainEntries: localStorage.getItem(STORAGE_KEY),
+    encryptedEntries: localStorage.getItem(ENCRYPTED_VAULT_KEY)
+  };
+}
+function restorePersistedVaultArtifacts(snapshot) {
+  if (snapshot.plainEntries === null) {
+    localStorage.removeItem(STORAGE_KEY);
+  } else {
+    localStorage.setItem(STORAGE_KEY, snapshot.plainEntries);
+  }
+  if (snapshot.encryptedEntries === null) {
+    localStorage.removeItem(ENCRYPTED_VAULT_KEY);
+  } else {
+    localStorage.setItem(ENCRYPTED_VAULT_KEY, snapshot.encryptedEntries);
+  }
 }
 function clearPersistedEntries() {
   localStorage.removeItem(STORAGE_KEY);
@@ -808,6 +859,18 @@ async function saveEditedEntry() {
     throw new Error("Another entry already uses this secret, digits, and period");
   }
   await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
+}
+function showConfirmDialog(title, message) {
+  return new Promise((resolve) => {
+    if (!confirmDialog) {
+      resolve(false);
+      return;
+    }
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    confirmCallback = resolve;
+    confirmDialog.showModal();
+  });
 }
 async function moveEntry(entryId, direction) {
   const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
@@ -942,6 +1005,11 @@ function createEntryNode(entry) {
   };
   removeBtn.onclick = async () => {
     try {
+      const confirmed = await showConfirmDialog(
+        "Remove this entry?",
+        `This will permanently remove "${entry.label}" from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       const nextEntries = entries.filter((item) => item.id !== entry.id);
       await replaceEntries(nextEntries);
       selectedEntryIds.delete(entry.id);
@@ -972,7 +1040,11 @@ function renderEntries() {
   setOnboardingVisibility();
   renderWorkspaceSummary();
   renderConnectionState();
-  if (!unlockPanel.classList.contains("hidden") && settings.encrypt) {
+  const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
+  if (workspaceHeading) {
+    workspaceHeading.textContent = isLocked ? "Vault Locked" : "Current Codes";
+  }
+  if (isLocked) {
     showEmptyState("Vault is locked. Unlock to view your codes.");
     return;
   }
@@ -1074,20 +1146,26 @@ async function decryptStoredEntries(passphrase) {
   return decryptVaultEntries(payload, passphrase);
 }
 async function persistEntries() {
-  if (!settings.persist) {
-    clearPersistedEntries();
-    return;
-  }
-  if (settings.encrypt) {
-    if (!currentPassphrase) {
-      throw new Error("Unlock or set a passphrase before saving encrypted entries");
+  const previousArtifacts = snapshotPersistedVaultArtifacts();
+  try {
+    if (!settings.persist) {
+      clearPersistedEntries();
+      return;
     }
-    await saveEncryptedEntries(entries, currentPassphrase);
-    localStorage.removeItem(STORAGE_KEY);
-    return;
+    if (settings.encrypt) {
+      if (!currentPassphrase) {
+        throw new Error("Unlock or set a passphrase before saving encrypted entries");
+      }
+      await saveEncryptedEntries(entries, currentPassphrase);
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    savePlainEntries();
+    localStorage.removeItem(ENCRYPTED_VAULT_KEY);
+  } catch (error) {
+    restorePersistedVaultArtifacts(previousArtifacts);
+    throw error;
   }
-  savePlainEntries();
-  localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 async function replaceEntries(nextEntries) {
   const previousEntries = entries;
@@ -1124,11 +1202,15 @@ async function addEntry(input) {
 function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   const unique = [];
   const seen = /* @__PURE__ */ new Set();
+  let skipped = 0;
   for (const uri of uris) {
     try {
       const entry = parseOtpAuthUri(uri);
       const key = entryKey(entry);
-      if (seen.has(key) || hasDuplicateEntry(entries, entry)) continue;
+      if (seen.has(key) || hasDuplicateEntry(entries, entry)) {
+        skipped++;
+        continue;
+      }
       seen.add(key);
       unique.push(entry);
     } catch {
@@ -1136,14 +1218,21 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
     }
   }
   if (unique.length === 0) throw new Error(`No new entries found from ${sourceLabel}`);
-  return unique;
+  return { candidates: unique, skipped, sourceLabel };
 }
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
-  importPreviewTitle.textContent = `Review ${importPreviewState.candidates.length} candidate${importPreviewState.candidates.length === 1 ? "" : "s"}`;
-  importPreviewStatus.textContent = `${importPreviewState.sourceLabel}: only valid, non-duplicate entries are shown below.`;
+  const candidates = importPreviewState.candidates || importPreviewState;
+  const skipped = importPreviewState.skipped || 0;
+  const sourceLabel = importPreviewState.sourceLabel || "Import";
+  importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
+  let statusText = `${sourceLabel}: only valid, non-duplicate entries are shown below.`;
+  if (skipped > 0) {
+    statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
+  }
+  importPreviewStatus.textContent = statusText;
   importPreviewList.innerHTML = "";
-  importPreviewState.candidates.forEach((entry, index) => {
+  candidates.forEach((entry, index) => {
     const row = document.createElement("article");
     row.className = "preview-item";
     row.dataset.index = String(index);
@@ -1165,8 +1254,8 @@ function renderImportPreview() {
     importPreviewList.appendChild(row);
   });
 }
-function openImportPreview(candidates, sourceLabel) {
-  importPreviewState = { candidates, sourceLabel };
+function openImportPreview(previewResult, sourceLabel) {
+  importPreviewState = previewResult;
   if (importPreviewTagsInput) importPreviewTagsInput.value = "";
   renderImportPreview();
   importDialog?.showModal?.();
@@ -1176,11 +1265,13 @@ async function commitImportPreview(previewState = importPreviewState) {
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
   let nextOrder = nextOrderValue();
   const rows = [...importPreviewList.querySelectorAll(".preview-item")];
+  const candidates = previewState.candidates || previewState;
+  const sourceLabel = previewState.sourceLabel || "Import";
   const enriched = rows.flatMap((row) => {
     const include = row.querySelector(".preview-include");
     if (!include?.checked) return [];
     const index = Number(row.dataset.index);
-    const baseEntry = previewState.candidates[index];
+    const baseEntry = candidates[index];
     return [{
       ...baseEntry,
       label: row.querySelector(".preview-label")?.value.trim() || baseEntry.label,
@@ -1194,7 +1285,7 @@ async function commitImportPreview(previewState = importPreviewState) {
   });
   if (enriched.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...enriched]);
-  setImportStatus(`${previewState.sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
+  setImportStatus(`${sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
 }
 async function decodeQrFromBlob(blob) {
   if (typeof window.jsQR !== "function") {
@@ -1251,32 +1342,53 @@ async function handleSaveSettings() {
   if (nextSettings.encrypt) {
     const first = vaultPassphraseInput.value.trim();
     const second = vaultPassphraseConfirmInput.value.trim();
-    if (!currentPassphrase && !first) {
+    const needsInitialPassphrase = !settings.encrypt || !settings.persist || !currentPassphrase;
+    if (needsInitialPassphrase && !first) {
       throw new Error("Enter a passphrase to enable encryption");
     }
-    if (first || second) {
-      if (first !== second) {
-        throw new Error("Passphrase confirmation does not match");
+    if (needsInitialPassphrase || first || second) {
+      if (settings.encrypt && settings.persist && currentPassphrase && (first || second)) {
+        nextPassphrase = currentPassphrase;
+      } else {
+        if (first !== second) {
+          throw new Error("Passphrase confirmation does not match");
+        }
+        nextPassphrase = normalizePassphrase(first);
       }
-      nextPassphrase = normalizePassphrase(first);
     }
   } else {
     nextPassphrase = "";
   }
+  const previousSettings = { ...settings };
+  const previousPassphrase = currentPassphrase;
+  const previousStoredSettings = localStorage.getItem(SETTINGS_KEY);
   settings = nextSettings;
   currentPassphrase = nextPassphrase;
-  saveSettings();
   syncSettingsUI();
   applyVisualSettings();
-  if (!settings.persist) {
-    clearPersistedEntries();
-    setLocked(false);
-    setSettingsStatus("Entries are now session-only", "success");
-    vaultPassphraseInput.value = "";
-    vaultPassphraseConfirmInput.value = "";
-    return;
+  try {
+    saveSettings();
+    if (!settings.persist) {
+      clearPersistedEntries();
+      setLocked(false);
+      setSettingsStatus("Entries are now session-only", "success");
+      vaultPassphraseInput.value = "";
+      vaultPassphraseConfirmInput.value = "";
+      return;
+    }
+    await persistEntries();
+  } catch (error) {
+    settings = previousSettings;
+    currentPassphrase = previousPassphrase;
+    if (previousStoredSettings === null) {
+      localStorage.removeItem(SETTINGS_KEY);
+    } else {
+      localStorage.setItem(SETTINGS_KEY, previousStoredSettings);
+    }
+    syncSettingsUI();
+    applyVisualSettings();
+    throw error;
   }
-  await persistEntries();
   setLocked(false);
   setSettingsStatus(settings.encrypt ? "Encrypted vault saved" : "Device storage updated", "success");
   vaultPassphraseInput.value = "";
@@ -1302,17 +1414,53 @@ async function exportBackup() {
   }
   downloadJson("otp-vault-backup.json", await createPlainBackup(entries));
 }
+async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
+  if (!settings.persist || !settings.encrypt) {
+    throw new Error("Enable encrypted device storage before changing the vault passphrase");
+  }
+  if (!currentPassphrase) {
+    throw new Error("Unlock the vault before changing the passphrase");
+  }
+  if (currentPassphraseCandidate !== currentPassphrase) {
+    throw new Error("Current passphrase is incorrect");
+  }
+  if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
+    throw new Error("Passphrase confirmation does not match");
+  }
+  const normalizedNextPassphrase = normalizePassphrase(nextPassphraseCandidate);
+  const previousPassphrase = currentPassphrase;
+  currentPassphrase = normalizedNextPassphrase;
+  try {
+    await persistEntries();
+  } catch (error) {
+    currentPassphrase = previousPassphrase;
+    throw error;
+  }
+}
 function renderBackupReview(backup) {
   if (!backupReviewSummary) return;
   backupReviewSummary.innerHTML = "";
-  [
+  const backupEntries = backup.entries || [];
+  const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
+  let summaryItems = [
     `Integrity: ${backup.integrity === "verified" ? "verified checksum" : "legacy backup"}`,
     `Encrypted: ${backup.encrypted ? "yes" : "no"}`,
     `Schema: v${backup.schemaVersion}`,
     `Created: ${backup.createdAt || "unknown"}`,
     `Incoming items: ${backup.itemCount}`,
     `Current vault size: ${entries.length}`
-  ].forEach((item) => {
+  ];
+  if (backup.invalidItemCount > 0) {
+    summaryItems.push(`Review: ${backup.invalidItemCount} invalid item${backup.invalidItemCount === 1 ? "" : "s"} skipped before import`);
+  }
+  if (mode === "merge" && backupEntries.length > 0 && entries.length > 0) {
+    const duplicates = backupEntries.filter(
+      (candidate) => entries.some((entry) => entryKey(entry) === entryKey(candidate))
+    ).length;
+    const newEntries = backupEntries.length - duplicates;
+    summaryItems.push(`Merge: ${newEntries} new, ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped`);
+  }
+  summaryItems.forEach((item) => {
     const row = document.createElement("div");
     row.className = "preview-item";
     row.textContent = item;
@@ -1342,9 +1490,6 @@ async function importBackupFile(file, backup = null) {
     const passphrase = backupImportPassphraseInput?.value.trim() || window.prompt("Backup is encrypted. Enter the backup passphrase:");
     if (!passphrase) throw new Error("Backup import cancelled");
     const decrypted = await decryptVaultEntries(resolvedBackup.vault, passphrase);
-    if (settings.encrypt) {
-      currentPassphrase = normalizePassphrase(passphrase);
-    }
     const nextEntries2 = mode === "replace" ? decrypted : [...entries, ...decrypted.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
     await replaceEntries(nextEntries2);
     return;
@@ -1372,6 +1517,17 @@ async function stageBackupImport(file) {
 }
 async function commitBackupImport() {
   if (!backupImportState) return;
+  const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
+  if (mode === "replace" && entries.length > 0) {
+    const confirmed = await showConfirmDialog(
+      "Replace entire vault?",
+      `This will delete all ${entries.length} existing entr${entries.length === 1 ? "y" : "ies"} and replace them with the backup contents. This action cannot be undone.`
+    );
+    if (!confirmed) {
+      setSettingsStatus("Backup import cancelled", "warning");
+      return;
+    }
+  }
   await importBackupFile(backupImportState.file, backupImportState.backup);
 }
 function registerCameraDetection(uri) {
@@ -1403,7 +1559,7 @@ async function startCameraScan() {
       return;
     }
     if (!registerCameraDetection(otpUri)) {
-      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "success");
+      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "warning");
       return;
     }
     try {
@@ -1538,7 +1694,7 @@ function bindEvents() {
     try {
       setImportStatus("Starting camera...");
       await startCameraScan();
-      setImportStatus("Camera ready. Hold a QR code in front of it.", "success");
+      setImportStatus("Camera ready. Hold a QR code in front of it.", "");
     } catch (error) {
       reportError("Camera start failed", error);
       setImportStatus(toUserMessage(error, "Could not start camera"), "error");
@@ -1550,6 +1706,15 @@ function bindEvents() {
   });
   clearAllBtn.addEventListener("click", async () => {
     try {
+      if (entries.length === 0) {
+        setImportStatus("No entries to clear", "warning");
+        return;
+      }
+      const confirmed = await showConfirmDialog(
+        "Clear all entries?",
+        `This will permanently remove all ${entries.length} entr${entries.length === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       await replaceEntries([]);
       setImportStatus("All entries cleared", "success");
     } catch (error) {
@@ -1589,6 +1754,13 @@ function bindEvents() {
   });
   bulkRemoveBtn?.addEventListener("click", async () => {
     try {
+      const count = selectedEntryIds.size;
+      if (count === 0) return;
+      const confirmed = await showConfirmDialog(
+        "Remove selected entries?",
+        `This will permanently remove ${count} selected entr${count === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+      );
+      if (!confirmed) return;
       await replaceEntries(entries.filter((entry) => !selectedEntryIds.has(entry.id)));
       selectedEntryIds.clear();
       renderBulkBar();
@@ -1615,6 +1787,33 @@ function bindEvents() {
       reportError("Backup export failed", error);
       setSettingsStatus(toUserMessage(error, "Could not export backup"), "error");
     }
+  });
+  changePassphraseBtn?.addEventListener("click", () => {
+    if (!changePassphraseDialog?.showModal) return;
+    setChangePassphraseStatus("");
+    currentPassphraseInput.value = "";
+    newPassphraseInput.value = "";
+    newPassphraseConfirmInput.value = "";
+    changePassphraseDialog.showModal();
+  });
+  changePassphraseForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await changeVaultPassphrase(
+        currentPassphraseInput.value.trim(),
+        newPassphraseInput.value.trim(),
+        newPassphraseConfirmInput.value.trim()
+      );
+      setChangePassphraseStatus("");
+      changePassphraseDialog.close("accept");
+      setSettingsStatus("Vault passphrase updated", "success");
+    } catch (error) {
+      setChangePassphraseStatus(toUserMessage(error, "Could not update passphrase"), "error");
+    }
+  });
+  changePassphraseDialog?.addEventListener("close", () => {
+    setChangePassphraseStatus("");
   });
   importBackupInput.addEventListener("change", async () => {
     const [file] = importBackupInput.files || [];
@@ -1699,6 +1898,11 @@ function bindEvents() {
       setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
     }
   });
+  backupImportMode?.addEventListener("change", () => {
+    if (backupImportState?.backup) {
+      renderBackupReview(backupImportState.backup);
+    }
+  });
   backupReviewDialog?.addEventListener("close", () => {
     backupImportState = null;
   });
@@ -1715,6 +1919,21 @@ function bindEvents() {
   });
   editEntryDialog?.addEventListener("close", () => {
     setStatus(editEntryStatus, "");
+  });
+  confirmForm?.addEventListener("submit", (event) => {
+    if (event.submitter?.value !== "accept") {
+      if (confirmCallback) confirmCallback(false);
+      confirmCallback = null;
+      return;
+    }
+    event.preventDefault();
+    if (confirmCallback) confirmCallback(true);
+    confirmCallback = null;
+    confirmDialog?.close();
+  });
+  confirmDialog?.addEventListener("close", () => {
+    if (confirmCallback) confirmCallback(false);
+    confirmCallback = null;
   });
 }
 window.otpVaultDebug = {

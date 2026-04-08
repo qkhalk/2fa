@@ -86,7 +86,18 @@
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
       </div>
-      <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
+      <div class="security-actions">
+        <button id="change-passphrase-btn" class="ghost-btn hidden" type="button">Change Passphrase</button>
+        <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
+      </div>
+      </form>
+      <form id="change-passphrase-form" class="hidden change-passphrase-form">
+        <input id="current-passphrase" type="password" placeholder="Current passphrase">
+        <input id="new-passphrase" type="password" placeholder="New passphrase">
+        <input id="new-passphrase-confirm" type="password" placeholder="Confirm new passphrase">
+        <div class="security-actions">
+          <button id="change-passphrase-submit" class="primary-btn" type="submit">Update Passphrase</button>
+        </div>
       </form>
     </section>
 
