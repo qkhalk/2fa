@@ -442,12 +442,17 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
   if (!Array.isArray(payload.entries)) {
     throw new OtpVaultError("Backup entries are missing or invalid", { code: "BACKUP_ENTRIES" });
   }
+  const totalItems = payload.entries.length;
   const entries2 = normalizeEntries(payload.entries);
+  if (entries2.length === 0) {
+    throw new OtpVaultError("Backup contains invalid entries", { code: "BACKUP_ENTRIES_INVALID" });
+  }
   return {
     encrypted: false,
     integrity,
     createdAt: migrated.createdAt || null,
-    itemCount: entries2.length,
+    itemCount: totalItems,
+    invalidItemCount: totalItems - entries2.length,
     schemaVersion: payload.schemaVersion || 1,
     entries: entries2
   };
@@ -503,6 +508,7 @@ var clearClipboardToggle = document.getElementById("clear-clipboard-toggle");
 var encryptionFields = document.getElementById("encryption-fields");
 var vaultPassphraseInput = document.getElementById("vault-passphrase");
 var vaultPassphraseConfirmInput = document.getElementById("vault-passphrase-confirm");
+var changePassphraseBtn = document.getElementById("change-passphrase-btn");
 var saveSettingsBtn = document.getElementById("save-settings");
 var settingsStatus = document.getElementById("settings-status");
 var exportBackupBtn = document.getElementById("export-backup");
@@ -538,6 +544,12 @@ var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
 var editEntryStatus = document.getElementById("edit-entry-status");
+var changePassphraseDialog = document.getElementById("change-passphrase-dialog");
+var changePassphraseForm = document.getElementById("change-passphrase-form");
+var currentPassphraseInput = document.getElementById("current-passphrase");
+var newPassphraseInput = document.getElementById("new-passphrase");
+var newPassphraseConfirmInput = document.getElementById("new-passphrase-confirm");
+var changePassphraseStatus = document.getElementById("change-passphrase-status");
 var confirmDialog = document.getElementById("confirm-dialog");
 var confirmForm = document.getElementById("confirm-form");
 var confirmTitle = document.getElementById("confirm-title");
@@ -608,6 +620,8 @@ function syncSettingsUI() {
   sortSelect.value = settings.sortBy;
   groupSelect.value = settings.groupBy;
   encryptionFields.classList.toggle("hidden", !settings.encrypt);
+  const canChangePassphrase = settings.persist && settings.encrypt;
+  changePassphraseBtn?.classList.toggle("hidden", !canChangePassphrase);
   if (lockAppBtn) {
     lockAppBtn.classList.toggle("hidden", !settings.encrypt);
   }
@@ -655,6 +669,9 @@ function setImportStatus(message, tone = "") {
 function setSettingsStatus(message, tone = "") {
   setStatus(settingsStatus, message, tone);
   if (message) showToast(tone === "error" ? "Settings" : "Vault", message, tone || "success");
+}
+function setChangePassphraseStatus(message, tone = "") {
+  setStatus(changePassphraseStatus, message, tone);
 }
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
@@ -707,6 +724,7 @@ function setLocked(locked) {
   searchInput.disabled = locked;
   sortSelect.disabled = locked;
   groupSelect.disabled = locked;
+  changePassphraseBtn?.classList.toggle("hidden", locked || !settings.persist || !settings.encrypt);
 }
 function loadPlainEntries() {
   try {
@@ -1324,14 +1342,19 @@ async function handleSaveSettings() {
   if (nextSettings.encrypt) {
     const first = vaultPassphraseInput.value.trim();
     const second = vaultPassphraseConfirmInput.value.trim();
-    if (!currentPassphrase && !first) {
+    const needsInitialPassphrase = !settings.encrypt || !settings.persist || !currentPassphrase;
+    if (needsInitialPassphrase && !first) {
       throw new Error("Enter a passphrase to enable encryption");
     }
-    if (first || second) {
-      if (first !== second) {
-        throw new Error("Passphrase confirmation does not match");
+    if (needsInitialPassphrase || first || second) {
+      if (settings.encrypt && settings.persist && currentPassphrase && (first || second)) {
+        nextPassphrase = currentPassphrase;
+      } else {
+        if (first !== second) {
+          throw new Error("Passphrase confirmation does not match");
+        }
+        nextPassphrase = normalizePassphrase(first);
       }
-      nextPassphrase = normalizePassphrase(first);
     }
   } else {
     nextPassphrase = "";
@@ -1391,6 +1414,29 @@ async function exportBackup() {
   }
   downloadJson("otp-vault-backup.json", await createPlainBackup(entries));
 }
+async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
+  if (!settings.persist || !settings.encrypt) {
+    throw new Error("Enable encrypted device storage before changing the vault passphrase");
+  }
+  if (!currentPassphrase) {
+    throw new Error("Unlock the vault before changing the passphrase");
+  }
+  if (currentPassphraseCandidate !== currentPassphrase) {
+    throw new Error("Current passphrase is incorrect");
+  }
+  if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
+    throw new Error("Passphrase confirmation does not match");
+  }
+  const normalizedNextPassphrase = normalizePassphrase(nextPassphraseCandidate);
+  const previousPassphrase = currentPassphrase;
+  currentPassphrase = normalizedNextPassphrase;
+  try {
+    await persistEntries();
+  } catch (error) {
+    currentPassphrase = previousPassphrase;
+    throw error;
+  }
+}
 function renderBackupReview(backup) {
   if (!backupReviewSummary) return;
   backupReviewSummary.innerHTML = "";
@@ -1404,6 +1450,9 @@ function renderBackupReview(backup) {
     `Incoming items: ${backup.itemCount}`,
     `Current vault size: ${entries.length}`
   ];
+  if (backup.invalidItemCount > 0) {
+    summaryItems.push(`Review: ${backup.invalidItemCount} invalid item${backup.invalidItemCount === 1 ? "" : "s"} skipped before import`);
+  }
   if (mode === "merge" && backupEntries.length > 0 && entries.length > 0) {
     const duplicates = backupEntries.filter(
       (candidate) => entries.some((entry) => entryKey(entry) === entryKey(candidate))
@@ -1441,17 +1490,8 @@ async function importBackupFile(file, backup = null) {
     const passphrase = backupImportPassphraseInput?.value.trim() || window.prompt("Backup is encrypted. Enter the backup passphrase:");
     if (!passphrase) throw new Error("Backup import cancelled");
     const decrypted = await decryptVaultEntries(resolvedBackup.vault, passphrase);
-    const previousPassphrase = currentPassphrase;
-    if (settings.encrypt) {
-      currentPassphrase = normalizePassphrase(passphrase);
-    }
     const nextEntries2 = mode === "replace" ? decrypted : [...entries, ...decrypted.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
-    try {
-      await replaceEntries(nextEntries2);
-    } catch (error) {
-      currentPassphrase = previousPassphrase;
-      throw error;
-    }
+    await replaceEntries(nextEntries2);
     return;
   }
   const nextEntries = mode === "replace" ? resolvedBackup.entries : [...entries, ...resolvedBackup.entries.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
@@ -1747,6 +1787,33 @@ function bindEvents() {
       reportError("Backup export failed", error);
       setSettingsStatus(toUserMessage(error, "Could not export backup"), "error");
     }
+  });
+  changePassphraseBtn?.addEventListener("click", () => {
+    if (!changePassphraseDialog?.showModal) return;
+    setChangePassphraseStatus("");
+    currentPassphraseInput.value = "";
+    newPassphraseInput.value = "";
+    newPassphraseConfirmInput.value = "";
+    changePassphraseDialog.showModal();
+  });
+  changePassphraseForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await changeVaultPassphrase(
+        currentPassphraseInput.value.trim(),
+        newPassphraseInput.value.trim(),
+        newPassphraseConfirmInput.value.trim()
+      );
+      setChangePassphraseStatus("");
+      changePassphraseDialog.close("accept");
+      setSettingsStatus("Vault passphrase updated", "success");
+    } catch (error) {
+      setChangePassphraseStatus(toUserMessage(error, "Could not update passphrase"), "error");
+    }
+  });
+  changePassphraseDialog?.addEventListener("close", () => {
+    setChangePassphraseStatus("");
   });
   importBackupInput.addEventListener("change", async () => {
     const [file] = importBackupInput.files || [];
