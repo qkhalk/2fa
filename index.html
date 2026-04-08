@@ -204,6 +204,7 @@
                 <span>Import Backup</span>
                 <input id="import-backup" type="file" accept="application/json">
               </label>
+              <button type="button" id="change-passphrase-btn" class="btn ghost hidden">Change Passphrase</button>
               <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
             </div>
 
@@ -425,6 +426,30 @@
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">Cancel</button>
         <button id="save-entry-edit" value="accept" class="btn primary" type="submit">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="change-passphrase-dialog" class="dialog-shell">
+    <form id="change-passphrase-form" method="dialog" class="dialog-card">
+      <p class="eyebrow">vault passphrase</p>
+      <h3>Change passphrase</h3>
+      <label>
+        <span>Current passphrase</span>
+        <input id="current-passphrase" type="password" placeholder="Enter current passphrase">
+      </label>
+      <label>
+        <span>New passphrase</span>
+        <input id="new-passphrase" type="password" placeholder="Use a new strong passphrase">
+      </label>
+      <label>
+        <span>Confirm new passphrase</span>
+        <input id="new-passphrase-confirm" type="password" placeholder="Repeat new passphrase">
+      </label>
+      <p id="change-passphrase-status" class="helper-text status-line"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">Cancel</button>
+        <button id="update-passphrase" value="accept" class="btn primary" type="submit">Update Passphrase</button>
       </div>
     </form>
   </dialog>

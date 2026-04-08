@@ -894,6 +894,10 @@ textarea {
   cursor: pointer;
 }
 
+#change-passphrase-form {
+  max-width: 440px;
+}
+
 @keyframes urgent-pulse {
   0%,
   100% {
