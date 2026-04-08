@@ -79,8 +79,9 @@ Suggested flow:
 ## Release Automation
 
 - GitHub Actions runs `.github/workflows/release.yml` automatically when `extension/manifest.json` changes on `main` or `master`.
-- If the extension `version` value changes, the workflow builds fresh bundles, creates tag `extension-v<version>`, and publishes a GitHub Release.
-- The release attaches both the web archive and the extension archive for that version.
+- `package.json` and `extension/manifest.json` must keep the same version. CI and release automation fail fast if they drift.
+- If the extension `version` value changes, the workflow builds the extension bundle, creates tag `extension-v<version>`, and publishes a GitHub Release.
+- The release attaches the packaged extension archive for that version.
 - You can also trigger the same workflow manually from the Actions tab.
 
 ## Notes

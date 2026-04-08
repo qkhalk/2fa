@@ -8,6 +8,8 @@ on:
       - master
     paths:
       - extension/manifest.json
+      - package.json
+      - scripts/verify-version-sync.mjs
       - .github/workflows/release.yml
 
 permissions:
@@ -89,11 +91,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify version sync
+        run: npm run verify:version
+
       - name: Build distributables
         run: npm run build
-
-      - name: Archive browser app bundle
-        run: tar -czf otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz index.html styles.css app.js app.bundle.js lib sw.js manifest.webmanifest icon.svg icons favicon.ico
 
       - name: Archive extension bundle
         run: tar -czf otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz extension
@@ -104,7 +106,6 @@ jobs:
         shell: bash
         run: |
           gh release create "${{ needs.detect-version.outputs.tag_name }}" \
-            "otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz" \
             "otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz" \
             --target "${{ github.sha }}" \
             --title "Extension v${{ needs.detect-version.outputs.current_version }}" \
@@ -113,7 +114,5 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: otp-vault-release-bundles-${{ needs.detect-version.outputs.current_version }}
-          path: |
-            otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz
-            otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz
+          name: otp-vault-extension-release-${{ needs.detect-version.outputs.current_version }}
+          path: otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz
