@@ -3,15 +3,83 @@ name: Release
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+      - master
+    paths:
+      - extension/manifest.json
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
 
 jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+
+    outputs:
+      current_version: ${{ steps.version.outputs.current_version }}
+      previous_version: ${{ steps.version.outputs.previous_version }}
+      version_changed: ${{ steps.version.outputs.version_changed }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      release_exists: ${{ steps.version.outputs.release_exists }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect extension version change
+        id: version
+        shell: bash
+        run: |
+          current_version=$(node -p "JSON.parse(require('fs').readFileSync('extension/manifest.json', 'utf8')).version")
+          previous_version=""
+
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}:extension/manifest.json" 2>/dev/null; then
+            previous_version=$(git show "${{ github.event.before }}:extension/manifest.json" | node -e "let data=''; process.stdin.on('data', chunk => data += chunk); process.stdin.on('end', () => process.stdout.write(JSON.parse(data).version || ''))")
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version_changed=true
+          elif [ "$current_version" != "$previous_version" ]; then
+            version_changed=true
+          else
+            version_changed=false
+          fi
+
+          tag_name="extension-v${current_version}"
+          if git rev-parse "$tag_name" >/dev/null 2>&1; then
+            release_exists=true
+          else
+            release_exists=false
+          fi
+
+          {
+            echo "current_version=$current_version"
+            echo "previous_version=$previous_version"
+            echo "version_changed=$version_changed"
+            echo "tag_name=$tag_name"
+            echo "release_exists=$release_exists"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report skipped release
+        if: steps.version.outputs.version_changed != 'true' || steps.version.outputs.release_exists == 'true'
+        run: |
+          echo "current_version=${{ steps.version.outputs.current_version }}"
+          echo "previous_version=${{ steps.version.outputs.previous_version }}"
+          echo "version_changed=${{ steps.version.outputs.version_changed }}"
+          echo "release_exists=${{ steps.version.outputs.release_exists }}"
+
   package:
+    needs: detect-version
+    if: needs.detect-version.outputs.version_changed == 'true' && needs.detect-version.outputs.release_exists != 'true'
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -25,15 +93,27 @@ jobs:
         run: npm run build
 
       - name: Archive browser app bundle
-        run: tar -czf otp-vault-web.tgz index.html styles.css app.js app.bundle.js lib sw.js manifest.webmanifest icon.svg icons
+        run: tar -czf otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz index.html styles.css app.js app.bundle.js lib sw.js manifest.webmanifest icon.svg icons favicon.ico
 
       - name: Archive extension bundle
-        run: tar -czf otp-vault-extension.tgz extension
+        run: tar -czf otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz extension
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ needs.detect-version.outputs.tag_name }}" \
+            "otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz" \
+            "otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz" \
+            --target "${{ github.sha }}" \
+            --title "Extension v${{ needs.detect-version.outputs.current_version }}" \
+            --notes "Automated release for extension version ${{ needs.detect-version.outputs.current_version }}."
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: otp-vault-release-bundles
+          name: otp-vault-release-bundles-${{ needs.detect-version.outputs.current_version }}
           path: |
-            otp-vault-web.tgz
-            otp-vault-extension.tgz
+            otp-vault-web-${{ needs.detect-version.outputs.current_version }}.tgz
+            otp-vault-extension-${{ needs.detect-version.outputs.current_version }}.tgz

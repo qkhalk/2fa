@@ -39,15 +39,32 @@ Then visit `http://127.0.0.1:4173`.
 ## Scripts
 
 ```bash
+npm run build:icons
 npm run build
 npm run test:unit
 npm run test:e2e
 npm test
 ```
 
+`npm run build:icons` regenerates the app and extension PNG icon assets from `icon.svg`.
+
 ## Extension
 
 The extension source lives in `extension/`. After building, load the folder as an unpacked extension in Chromium-based browsers.
+
+## Icons And Favicon
+
+- `icon.svg` is the single source for app branding.
+- `npm run build:icons` generates PWA icons in `icons/` and extension icons in `extension/icons/`.
+- The web app references `favicon.ico`, `icon.svg`, `icons/favicon-16x16.png`, `icons/favicon-32x32.png`, and `icons/apple-touch-icon.png` from `index.html`.
+- `favicon.ico` is generated separately for broader browser compatibility.
+
+If you update `icon.svg`, regenerate raster assets and the `.ico` file:
+
+```bash
+npm run build:icons
+magick "icon.svg" -define icon:auto-resize=16,32,48 "favicon.ico"
+```
 
 ## Contributing
 
@@ -58,6 +75,13 @@ Suggested flow:
 3. Use Conventional Commits
 4. Open a PR against the upstream repository
 5. Use the PR template and include screenshots for UI changes
+
+## Release Automation
+
+- GitHub Actions runs `.github/workflows/release.yml` automatically when `extension/manifest.json` changes on `main` or `master`.
+- If the extension `version` value changes, the workflow builds fresh bundles, creates tag `extension-v<version>`, and publishes a GitHub Release.
+- The release attaches both the web archive and the extension archive for that version.
+- You can also trigger the same workflow manually from the Actions tab.
 
 ## Notes
 
