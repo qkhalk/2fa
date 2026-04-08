@@ -116,6 +116,102 @@ test("rejects malformed backup files", async ({ page }) => {
   await expect(page.locator(".entry")).toHaveCount(1);
 });
 
+test("rejects backup import when checksum does not match payload integrity", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Alpha:user@example.com", secret: PRIMARY_SECRET });
+
+  const corruptedChecksumBackup = {
+    version: 2,
+    encrypted: false,
+    createdAt: new Date(FIXED_NOW).toISOString(),
+    itemCount: 1,
+    checksum: "00".repeat(32),
+    payload: {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: "valid-1",
+          label: "Imported:user@example.com",
+          secret: PRIMARY_SECRET,
+          digits: 6,
+          period: 30,
+          pinned: false,
+          tags: [],
+          createdAt: FIXED_NOW,
+        },
+      ],
+    },
+  };
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "checksum-mismatch-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(corruptedChecksumBackup), "utf8"),
+  });
+
+  await expect(page.locator("#settings-status")).toContainText("Backup integrity check failed");
+  await expect(page.locator("#backup-review-dialog")).toBeHidden();
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Alpha");
+});
+
+test("backup import review reports invalid entries skipped during mixed import", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Seed:user@example.com", secret: PRIMARY_SECRET });
+
+  const mixedBackup = {
+    version: 2,
+    encrypted: false,
+    createdAt: new Date(FIXED_NOW).toISOString(),
+    itemCount: 2,
+    checksum: "",
+    payload: {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: "valid-1",
+          label: "Valid:user@example.com",
+          secret: PRIMARY_SECRET,
+          digits: 6,
+          period: 30,
+          pinned: false,
+          tags: [],
+          createdAt: FIXED_NOW,
+        },
+        {
+          id: "invalid-1",
+          label: "Invalid:user@example.com",
+          secret: "BAD*",
+          digits: 6,
+          period: 30,
+          pinned: false,
+          tags: [],
+          createdAt: FIXED_NOW,
+        },
+      ],
+    },
+  };
+
+  const digest = await page.evaluate(async (payload) => {
+    const data = new TextEncoder().encode(JSON.stringify(payload));
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(hash)].map((part) => part.toString(16).padStart(2, "0")).join("");
+  }, mixedBackup.payload);
+  mixedBackup.checksum = digest;
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "mixed-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(mixedBackup), "utf8"),
+  });
+
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await expect(page.locator("#backup-review-summary")).toContainText(/invalid/i);
+  await expect(page.locator("#backup-review-summary")).toContainText(/skipped/i);
+  await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator(".entry-label")).toHaveText("Seed");
+});
+
 test("allows retrying encrypted backup import after a wrong passphrase", async ({ page }) => {
   await loadApp(page);
   await addEntry(page, { label: "Secure:user@example.com", secret: PRIMARY_SECRET });
@@ -170,6 +266,66 @@ test("keeps existing entries on merge import when incoming entries are duplicate
 
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
   await expect(page.locator(".entry")).toHaveCount(1);
+});
+
+test("backup review merge/replace summary stays accurate while toggling import mode", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Alpha:user@example.com", secret: PRIMARY_SECRET });
+  await addEntry(page, { label: "Beta:user@example.com", secret: "NB2W45DFOIZA====" });
+
+  const backupEntries = [
+    {
+      id: "backup-1",
+      label: "Alpha:user@example.com",
+      secret: PRIMARY_SECRET,
+      digits: 6,
+      period: 30,
+      pinned: false,
+      tags: [],
+      createdAt: FIXED_NOW,
+    },
+    {
+      id: "backup-2",
+      label: "Gamma:user@example.com",
+      secret: "MZXW6YTBOI======",
+      digits: 6,
+      period: 30,
+      pinned: false,
+      tags: [],
+      createdAt: FIXED_NOW,
+    },
+  ];
+
+  const payload = { schemaVersion: 1, entries: backupEntries };
+  const checksum = await page.evaluate(async (body) => {
+    const data = new TextEncoder().encode(JSON.stringify(body));
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(hash)].map((part) => part.toString(16).padStart(2, "0")).join("");
+  }, payload);
+
+  const backup = {
+    version: 2,
+    encrypted: false,
+    createdAt: new Date(FIXED_NOW).toISOString(),
+    itemCount: backupEntries.length,
+    checksum,
+    payload,
+  };
+
+  await page.locator("#import-backup").setInputFiles({
+    name: "toggle-mode-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(backup), "utf8"),
+  });
+
+  await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await expect(page.locator("#backup-review-summary")).toContainText("Merge: 1 new, 1 duplicate skipped");
+
+  await page.locator("#backup-import-mode").selectOption("replace");
+  await expect(page.locator("#backup-review-summary")).not.toContainText("Merge: 1 new, 1 duplicate skipped");
+
+  await page.locator("#backup-import-mode").selectOption("merge");
+  await expect(page.locator("#backup-review-summary")).toContainText("Merge: 1 new, 1 duplicate skipped");
 });
 
 test("replace import overwrites existing entries with backup entries", async ({ page }) => {
