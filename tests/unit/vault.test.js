@@ -68,6 +68,45 @@ describe("vault helpers", () => {
     expect(parsed.vault).toHaveProperty("data");
   });
 
+  it("parses legacy v1 plain backups that use payload.entries wrapper", async () => {
+    const legacyWrappedBackup = {
+      version: 1,
+      encrypted: false,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      payload: {
+        schemaVersion: 1,
+        entries,
+      },
+    };
+
+    const parsed = await parseBackupFile(legacyWrappedBackup);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.integrity).toBe("legacy");
+    expect(parsed.itemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("parses legacy v1 encrypted backups that use payload.vault wrapper", async () => {
+    const vault = await encryptEntries(entries, "correct horse battery");
+    const legacyWrappedEncryptedBackup = {
+      version: 1,
+      encrypted: true,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      payload: {
+        schemaVersion: 1,
+        vault,
+      },
+    };
+
+    const parsed = await parseBackupFile(legacyWrappedEncryptedBackup);
+
+    expect(parsed.encrypted).toBe(true);
+    expect(parsed.integrity).toBe("legacy");
+    expect(parsed.itemCount).toBe(0);
+    expect(parsed.vault).toEqual(vault);
+  });
+
   it("rejects plain backups with entries missing required id", async () => {
     const backup = await createPlainBackup([omitEntryField("id")]);
 
@@ -88,6 +127,18 @@ describe("vault helpers", () => {
 
   it("rejects plain backups with entries containing an empty secret", async () => {
     const backup = await createPlainBackup([withEntryField("secret", "")]);
+
+    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+  });
+
+  it("rejects plain backups with entries containing a whitespace-only secret", async () => {
+    const backup = await createPlainBackup([withEntryField("secret", "   ")]);
+
+    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+  });
+
+  it("rejects plain backups with entries containing a non-string secret", async () => {
+    const backup = await createPlainBackup([withEntryField("secret", 123456)]);
 
     await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
   });
