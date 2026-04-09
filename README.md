@@ -63,8 +63,9 @@ If you update `icon.svg`, regenerate raster assets and the `.ico` file:
 
 ```bash
 npm run build:icons
-magick "icon.svg" -define icon:auto-resize=16,32,48 "favicon.ico"
 ```
+
+`npm run build:icons` now regenerates `favicon.ico` from the transparent PNG favicon sources so browser tabs do not get white corner fills.
 
 ## Contributing
 
