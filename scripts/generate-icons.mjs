@@ -7,6 +7,27 @@ import sharp from "sharp";
 
 const execFileAsync = promisify(execFile);
 
+async function buildFaviconIco(appOut) {
+  const args = [
+    resolve(appOut, "favicon-16x16.png"),
+    resolve(appOut, "favicon-32x32.png"),
+    "-background",
+    "none",
+    resolve("favicon.ico"),
+  ];
+
+  try {
+    await execFileAsync("magick", args);
+    return;
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await execFileAsync("convert", args);
+}
+
 const source = resolve("icon.svg");
 const appOut = resolve("icons");
 const extensionOut = resolve("extension", "icons");
@@ -26,12 +47,6 @@ await Promise.all([
   sharp(source).resize(128, 128).png().toFile(resolve(extensionOut, "icon-128.png")),
 ]);
 
-await execFileAsync("magick", [
-  resolve(appOut, "favicon-16x16.png"),
-  resolve(appOut, "favicon-32x32.png"),
-  "-background",
-  "none",
-  resolve("favicon.ico"),
-]);
+await buildFaviconIco(appOut);
 
 console.log("Generated raster icons for PWA and extension");
