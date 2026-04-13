@@ -485,10 +485,10 @@ test("web security form must not silently change active passphrase for existing 
   await acceptPersistWarning(page);
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
-  await page.locator("#vault-passphrase").fill(newPassphrase);
-  await page.locator("#vault-passphrase-confirm").fill(newPassphrase);
-  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
-  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+  await expect(page.locator("#vault-passphrase")).toBeHidden();
+  await expect(page.locator("#vault-passphrase-confirm")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Change Passphrase" })).toBeVisible();
+  await expect(page.locator("#settings-status")).toContainText("Use Change Passphrase to rotate your vault secret");
 
   await page.reload();
   await expect(page.locator("#unlock-panel")).toBeVisible();
@@ -529,6 +529,51 @@ test("web dedicated passphrase change updates unlock passphrase", async ({ page 
 
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
   await expect(page.locator(".entry")).toHaveCount(1);
+});
+
+test("web lock clears stale unlock success status", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Status:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await page.getByRole("button", { name: "Lock Vault" }).click();
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+  await expect(page.locator("#unlock-status")).toHaveText("");
+});
+
+test("web encrypted vault hides primary passphrase fields and directs users to change passphrase flow", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Passphrase:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+
+  await expect(page.locator("#vault-passphrase")).toBeHidden();
+  await expect(page.locator("#vault-passphrase-confirm")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Change Passphrase" })).toBeVisible();
+  await expect(page.locator("#settings-status")).toContainText("Use Change Passphrase to rotate your vault secret");
+});
+
+test("web privacy warning keeps focus on missing passphrase requirement before acceptance", async ({ page }) => {
+  await loadApp(page);
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+
+  await expect(page.locator("#privacy-dialog")).toBeHidden();
+  await expect(page.locator("#settings-status")).toContainText("Enter a passphrase to enable encryption");
 });
 
 test("encrypted backup import with a different passphrase must not silently change active vault passphrase", async ({ page }) => {

@@ -87,7 +87,7 @@ test("rejects encrypted backup import with wrong passphrase", async ({ page }) =
 
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.locator("#confirm-accept").click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.locator("#import-backup").setInputFiles({
@@ -225,7 +225,7 @@ test("allows retrying encrypted backup import after a wrong passphrase", async (
 
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.locator("#confirm-accept").click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.locator("#import-backup").setInputFiles({

@@ -968,16 +968,53 @@ test("extension security form must not silently change active passphrase", async
     await lockedPage.goto(`chrome-extension://${extensionId}/popup.html`);
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
 
-    await lockedPage.locator("#passphrase").fill(newPassphrase);
-    await lockedPage.locator("#passphrase-confirm").fill(newPassphrase);
-    await lockedPage.locator("#save-security").click();
-    await expect(lockedPage.locator("#status")).toContainText("Encrypted extension vault saved");
+    await expect(lockedPage.locator("#passphrase")).toBeHidden();
+    await expect(lockedPage.locator("#passphrase-confirm")).toBeHidden();
+    await expect(lockedPage.locator("#change-passphrase-btn")).toBeHidden();
+    await expect(lockedPage.locator("#status")).toHaveText("");
 
     await lockedPage.locator("#unlock-passphrase").fill(originalPassphrase);
     await lockedPage.locator("#unlock-passphrase").press("Enter");
 
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension encrypted vault hides primary passphrase fields after setup", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-passphrase-hidden-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Passphrase:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#encrypt-toggle").check();
+    await page.locator("#passphrase").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").press("Enter");
+    await expect(page.locator("#status")).toContainText("Use Change Passphrase to rotate your extension secret");
+    await expect(page.locator("#passphrase")).toBeHidden();
+    await expect(page.locator("#passphrase-confirm")).toBeHidden();
+    await expect(page.locator("#change-passphrase-btn")).toBeVisible();
   } finally {
     await context.close();
   }

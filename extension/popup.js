@@ -46,6 +46,7 @@ const unlockBtn = document.getElementById("unlock-btn");
 const unlockStatus = document.getElementById("unlock-status");
 const encryptToggle = document.getElementById("encrypt-toggle");
 const passphraseFields = document.getElementById("passphrase-fields");
+const passphraseGuidance = document.getElementById("passphrase-guidance");
 const passphraseInput = document.getElementById("passphrase");
 const passphraseConfirmInput = document.getElementById("passphrase-confirm");
 const changePassphraseBtn = document.getElementById("change-passphrase-btn");
@@ -87,7 +88,9 @@ async function initialize() {
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
   sortSelect.value = settings.sortBy || "alpha";
-  passphraseFields.classList.toggle("hidden", !settings.encrypt);
+  const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
+  passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
+  passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
   applyUiState();
 
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
@@ -654,7 +657,13 @@ function bindEvents() {
       passphraseConfirmInput.value = "";
       lockBtn.disabled = !settings.encrypt;
       changePassphraseBtn.classList.toggle("hidden", !settings.encrypt || !unlockPanel.classList.contains("hidden"));
-      setMainStatus(settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage", "success");
+      const encryptedVaultExists = Boolean(settings.encrypt && (currentPassphrase || previousArtifacts?.encrypted));
+      passphraseFields.classList.toggle("hidden", !settings.encrypt || encryptedVaultExists);
+      passphraseGuidance?.classList.toggle("hidden", !encryptedVaultExists);
+      setMainStatus(
+        encryptedVaultExists ? "Encrypted extension vault saved. Use Change Passphrase to rotate your extension secret." : settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage",
+        "success"
+      );
     } catch (error) {
       settings = previousSettings;
       currentPassphrase = previousPassphrase;

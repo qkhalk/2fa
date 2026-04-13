@@ -511,6 +511,7 @@ var blurCodesToggle = document.getElementById("blur-codes-toggle");
 var screenshotSafeToggle = document.getElementById("screenshot-safe-toggle");
 var clearClipboardToggle = document.getElementById("clear-clipboard-toggle");
 var encryptionFields = document.getElementById("encryption-fields");
+var passphraseGuidance = document.getElementById("passphrase-guidance");
 var vaultPassphraseInput = document.getElementById("vault-passphrase");
 var vaultPassphraseConfirmInput = document.getElementById("vault-passphrase-confirm");
 var changePassphraseBtn = document.getElementById("change-passphrase-btn");
@@ -619,6 +620,7 @@ function syncSettingsUI() {
   persistToggle.checked = settings.persist;
   encryptToggle.checked = settings.encrypt;
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
+  const hasExistingEncryptedVault = mustUnlockOnLoad && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
   unlockOnLoadToggle.checked = mustUnlockOnLoad ? true : settings.unlockOnLoad;
   unlockOnLoadToggle.disabled = mustUnlockOnLoad;
   blurCodesToggle.checked = settings.blurCodes;
@@ -626,7 +628,8 @@ function syncSettingsUI() {
   clearClipboardToggle.checked = settings.clearClipboard;
   sortSelect.value = settings.sortBy;
   groupSelect.value = settings.groupBy;
-  encryptionFields.classList.toggle("hidden", !settings.encrypt);
+  encryptionFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
+  passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
   const canChangePassphrase = settings.persist && settings.encrypt;
   changePassphraseBtn?.classList.toggle("hidden", !canChangePassphrase);
   if (lockAppBtn) {
@@ -1398,6 +1401,12 @@ async function unlockVault(passphrase) {
   await tick();
 }
 async function handleSaveSettings() {
+  if (persistToggle.checked && encryptToggle.checked) {
+    const needsInitialPassphrase = !settings.encrypt || !settings.persist || !currentPassphrase;
+    if (needsInitialPassphrase && !vaultPassphraseInput.value.trim()) {
+      throw new Error("Enter a passphrase to enable encryption");
+    }
+  }
   if (persistToggle.checked && !hasSeenPersistWarning()) {
     if (typeof privacyDialog.showModal === "function") {
       privacyDialog.showModal();
@@ -1468,7 +1477,11 @@ async function handleSaveSettings() {
     throw error;
   }
   setLocked(false);
-  setSettingsStatus(settings.encrypt ? "Encrypted vault saved" : "Device storage updated", "success");
+  const encryptedVaultExists = settings.persist && settings.encrypt && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
+  setSettingsStatus(
+    encryptedVaultExists ? "Encrypted vault saved. Use Change Passphrase to rotate your vault secret." : settings.encrypt ? "Encrypted vault saved" : "Device storage updated",
+    "success"
+  );
   vaultPassphraseInput.value = "";
   vaultPassphraseConfirmInput.value = "";
 }
@@ -1916,6 +1929,7 @@ function bindEvents() {
       return;
     }
     entries = [];
+    setUnlockStatus("");
     setLocked(true);
     renderEntries();
   });
