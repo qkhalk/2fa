@@ -654,6 +654,7 @@ test("encrypted storage forces unlock on load", async ({ page }) => {
   await page.locator("#unlock-on-load").uncheck();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await acceptPersistWarning(page);
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
   await expect(page.locator("#unlock-on-load")).toBeChecked();
   await expect(page.locator("#unlock-on-load")).toBeDisabled();
