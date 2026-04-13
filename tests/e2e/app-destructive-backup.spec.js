@@ -27,6 +27,7 @@ async function loadApp(page) {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
+  await expect(page.locator("#secret")).toBeVisible();
 }
 
 async function addEntry(page, { label, secret, digits = "6", period = "30" }) {
@@ -377,7 +378,7 @@ test("preserves encrypted vault settings and unlock behavior after backup replac
 
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.locator("#confirm-accept").click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.locator("#import-backup").setInputFiles({

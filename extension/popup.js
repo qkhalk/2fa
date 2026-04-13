@@ -68,6 +68,8 @@ const editPeriodInput = document.getElementById("edit-period");
 const editStatus = document.getElementById("edit-status");
 const cancelEditBtn = document.getElementById("cancel-edit");
 const saveEditBtn = document.getElementById("save-edit");
+const confirmRemoveDialog = document.getElementById("confirm-remove-dialog");
+const confirmRemoveMessage = document.getElementById("confirm-remove-message");
 
 let entries = [];
 let entryNodes = new Map();
@@ -75,6 +77,7 @@ let collapsed = false;
 let settings = { encrypt: false, sortBy: "alpha" };
 let currentPassphrase = "";
 let copyHistory = [];
+let confirmRemoveCallback = null;
 
 initialize();
 
@@ -216,14 +219,25 @@ function addCopyHistory(label, code) {
 
 function renderCopyHistory() {
   if (!copyHistoryRoot) return;
+  copyHistoryRoot.innerHTML = "";
   if (copyHistory.length === 0) {
-    copyHistoryRoot.innerHTML = '<div class="empty-state">Copied OTPs will appear here.</div>';
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "Copied OTPs will appear here.";
+    copyHistoryRoot.appendChild(empty);
     return;
   }
 
-  copyHistoryRoot.innerHTML = copyHistory
-    .map((item) => `<div class="history-item"><strong>${item.label}</strong><span>${item.code} • ${item.at}</span></div>`)
-    .join("");
+  for (const item of copyHistory) {
+    const row = document.createElement("div");
+    row.className = "history-item";
+    const strong = document.createElement("strong");
+    strong.textContent = item.label;
+    const span = document.createElement("span");
+    span.textContent = `${item.code} • ${item.at}`;
+    row.append(strong, span);
+    copyHistoryRoot.appendChild(row);
+  }
 }
 
 function nextOrderValue(items = entries) {
@@ -278,6 +292,17 @@ async function moveEntry(entryId, direction) {
   await replaceEntries(resequenceEntries(ordered));
 }
 
+function showRemoveConfirmation(message) {
+  if (!confirmRemoveDialog?.showModal) {
+    return Promise.resolve(window.confirm(message));
+  }
+  confirmRemoveMessage.textContent = message;
+  return new Promise((resolve) => {
+    confirmRemoveCallback = resolve;
+    confirmRemoveDialog.showModal();
+  });
+}
+
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
@@ -327,6 +352,8 @@ function createEntryNode(entry) {
 
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
+      const confirmed = await showRemoveConfirmation(`Remove "${entry.label}" from the extension vault? This action cannot be undone.`);
+      if (!confirmed) return;
       await replaceEntries(entries.filter((item) => item.id !== entry.id));
       setMainStatus("Removed entry", "success");
     } catch (error) {
@@ -683,5 +710,12 @@ function bindEvents() {
     } catch (error) {
       setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
     }
+  });
+
+  confirmRemoveDialog?.addEventListener("close", () => {
+    if (!confirmRemoveCallback) return;
+    const accepted = confirmRemoveDialog.returnValue === "accept";
+    confirmRemoveCallback(accepted);
+    confirmRemoveCallback = null;
   });
 }

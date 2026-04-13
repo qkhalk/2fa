@@ -561,9 +561,9 @@ var confirmTitle = document.getElementById("confirm-title");
 var confirmMessage = document.getElementById("confirm-message");
 var confirmAcceptBtn = document.getElementById("confirm-accept");
 var confirmCallback = null;
-var debugToggleBtn = document.getElementById("debug-toggle");
-var debugPanel = document.getElementById("debug-panel");
-var debugList = document.getElementById("debug-list");
+document.getElementById("debug-toggle")?.remove();
+document.getElementById("debug-panel")?.remove();
+var debugList = null;
 var defaultSettings = {
   persist: false,
   encrypt: false,
@@ -618,7 +618,9 @@ function saveSettings() {
 function syncSettingsUI() {
   persistToggle.checked = settings.persist;
   encryptToggle.checked = settings.encrypt;
-  unlockOnLoadToggle.checked = settings.unlockOnLoad;
+  const mustUnlockOnLoad = settings.persist && settings.encrypt;
+  unlockOnLoadToggle.checked = mustUnlockOnLoad ? true : settings.unlockOnLoad;
+  unlockOnLoadToggle.disabled = mustUnlockOnLoad;
   blurCodesToggle.checked = settings.blurCodes;
   screenshotSafeToggle.checked = settings.screenshotSafe;
   clearClipboardToggle.checked = settings.clearClipboard;
@@ -666,7 +668,14 @@ function showToast(title, message = "", tone = "success") {
   if (!toastRegion) return;
   const toast = document.createElement("div");
   toast.className = `toast ${tone}`;
-  toast.innerHTML = `<strong>${title}</strong>${message ? `<p>${message}</p>` : ""}`;
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  toast.appendChild(strong);
+  if (message) {
+    const paragraph = document.createElement("p");
+    paragraph.textContent = message;
+    toast.appendChild(paragraph);
+  }
   toastRegion.appendChild(toast);
   window.setTimeout(() => toast.remove(), 4200);
 }
@@ -708,16 +717,14 @@ function loadVaultOnStartup() {
   if (settings.encrypt) {
     const encryptedPayload = localStorage.getItem(ENCRYPTED_VAULT_KEY);
     const legacyPlainEntries = loadPlainEntries();
+    settings.unlockOnLoad = true;
     if (!encryptedPayload && legacyPlainEntries.length > 0) {
       entries = legacyPlainEntries;
       setLocked(false);
       return;
     }
     entries = [];
-    setLocked(true);
-    if (!settings.unlockOnLoad && !encryptedPayload) {
-      setLocked(false);
-    }
+    setLocked(Boolean(encryptedPayload));
     return;
   }
   entries = loadPlainEntries();
@@ -805,12 +812,19 @@ function renderCopyHistory() {
   if (!copyHistoryRoot) return;
   copyHistoryRoot.innerHTML = "";
   if (copyHistory.length === 0) {
-    copyHistoryRoot.innerHTML = '<li class="history-empty">No copied codes yet. The last few copied OTPs appear here for quick recall.</li>';
+    const empty = document.createElement("li");
+    empty.className = "history-empty";
+    empty.textContent = "No copied codes yet. The last few copied OTPs appear here for quick recall.";
+    copyHistoryRoot.appendChild(empty);
     return;
   }
   for (const item of copyHistory) {
     const row = document.createElement("li");
-    row.innerHTML = `<strong>${item.label}</strong><span>${item.code} \u2022 ${item.at}</span>`;
+    const strong = document.createElement("strong");
+    strong.textContent = item.label;
+    const span = document.createElement("span");
+    span.textContent = `${item.code} • ${item.at}`;
+    row.append(strong, span);
     copyHistoryRoot.appendChild(row);
   }
 }
@@ -818,12 +832,22 @@ function renderDebugFeed() {
   if (!debugList) return;
   debugList.innerHTML = "";
   if (debugEvents.length === 0) {
-    debugList.innerHTML = "<li><strong>No debug events yet</strong><span>Import, backup, and vault operations will appear here.</span></li>";
+    const row = document.createElement("li");
+    const strong = document.createElement("strong");
+    strong.textContent = "No debug events yet";
+    const span = document.createElement("span");
+    span.textContent = "Import, backup, and vault operations will appear here.";
+    row.append(strong, span);
+    debugList.appendChild(row);
     return;
   }
   for (const event of debugEvents) {
     const row = document.createElement("li");
-    row.innerHTML = `<strong>[${event.level}] ${event.message}</strong><span>${event.at}${event.detail ? ` \u2022 ${event.detail}` : ""}</span>`;
+    const strong = document.createElement("strong");
+    strong.textContent = `[${event.level}] ${event.message}`;
+    const span = document.createElement("span");
+    span.textContent = `${event.at}${event.detail ? ` • ${event.detail}` : ""}`;
+    row.append(strong, span);
     debugList.appendChild(row);
   }
 }
@@ -1259,21 +1283,40 @@ function renderImportPreview() {
     const row = document.createElement("article");
     row.className = "preview-item";
     row.dataset.index = String(index);
-    row.innerHTML = `
-      <label class="toggle-row">
-        <input type="checkbox" class="preview-include" checked>
-        <span>Import this entry</span>
-      </label>
-      <label>
-        <span>Label</span>
-        <input type="text" class="preview-label" value="${entry.label.replace(/"/g, "&quot;")}">
-      </label>
-      <label>
-        <span>Tags</span>
-        <input type="text" class="preview-tags" value="${(entry.tags || []).join(", ")}" placeholder="project, hardware-key">
-      </label>
-      <p>${entry.digits} digits • ${entry.period}s</p>
-    `;
+
+    const includeLabel = document.createElement("label");
+    includeLabel.className = "toggle-row";
+    const includeInput = document.createElement("input");
+    includeInput.type = "checkbox";
+    includeInput.className = "preview-include";
+    includeInput.checked = true;
+    const includeText = document.createElement("span");
+    includeText.textContent = "Import this entry";
+    includeLabel.append(includeInput, includeText);
+
+    const labelField = document.createElement("label");
+    const labelText = document.createElement("span");
+    labelText.textContent = "Label";
+    const labelInput = document.createElement("input");
+    labelInput.type = "text";
+    labelInput.className = "preview-label";
+    labelInput.value = entry.label;
+    labelField.append(labelText, labelInput);
+
+    const tagsField = document.createElement("label");
+    const tagsText = document.createElement("span");
+    tagsText.textContent = "Tags";
+    const tagsInput = document.createElement("input");
+    tagsInput.type = "text";
+    tagsInput.className = "preview-tags";
+    tagsInput.value = (entry.tags || []).join(", ");
+    tagsInput.placeholder = "project, hardware-key";
+    tagsField.append(tagsText, tagsInput);
+
+    const summary = document.createElement("p");
+    summary.textContent = `${entry.digits} digits • ${entry.period}s`;
+
+    row.append(includeLabel, labelField, tagsField, summary);
     importPreviewList.appendChild(row);
   });
 }
@@ -1364,7 +1407,7 @@ async function handleSaveSettings() {
   const nextSettings = {
     persist: persistToggle.checked,
     encrypt: encryptToggle.checked,
-    unlockOnLoad: unlockOnLoadToggle.checked,
+    unlockOnLoad: encryptToggle.checked ? true : unlockOnLoadToggle.checked,
     blurCodes: blurCodesToggle.checked,
     screenshotSafe: screenshotSafeToggle.checked,
     clearClipboard: clearClipboardToggle.checked,
@@ -1403,6 +1446,7 @@ async function handleSaveSettings() {
     saveSettings();
     if (!settings.persist) {
       clearPersistedEntries();
+      syncSettingsUI();
       setLocked(false);
       setSettingsStatus("Entries are now session-only", "success");
       vaultPassphraseInput.value = "";
@@ -1410,6 +1454,7 @@ async function handleSaveSettings() {
       return;
     }
     await persistEntries();
+    syncSettingsUI();
   } catch (error) {
     settings = previousSettings;
     currentPassphrase = previousPassphrase;
@@ -1893,11 +1938,6 @@ function bindEvents() {
     await deferredInstallPrompt.prompt();
     deferredInstallPrompt = null;
   });
-  debugToggleBtn?.addEventListener("click", () => {
-    const willShow = debugPanel.classList.contains("hidden");
-    debugPanel.classList.toggle("hidden", !willShow);
-    debugToggleBtn.setAttribute("aria-expanded", String(willShow));
-  });
   privacyDialog.addEventListener("close", () => {
     if (privacyDialog.returnValue === "accept") {
       markPersistWarningSeen();
@@ -1976,8 +2016,3 @@ function bindEvents() {
     confirmCallback = null;
   });
 }
-window.otpVaultDebug = {
-  extractOtpAuthUri,
-  parseLabelParts,
-  parseOtpAuthUri
-};

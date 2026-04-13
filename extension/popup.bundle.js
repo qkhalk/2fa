@@ -404,12 +404,15 @@ var editPeriodInput = document.getElementById("edit-period");
 var editStatus = document.getElementById("edit-status");
 var cancelEditBtn = document.getElementById("cancel-edit");
 var saveEditBtn = document.getElementById("save-edit");
+var confirmRemoveDialog = document.getElementById("confirm-remove-dialog");
+var confirmRemoveMessage = document.getElementById("confirm-remove-message");
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var collapsed = false;
 var settings = { encrypt: false, sortBy: "alpha" };
 var currentPassphrase = "";
 var copyHistory = [];
+var confirmRemoveCallback = null;
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
@@ -532,11 +535,24 @@ function addCopyHistory(label, code) {
 }
 function renderCopyHistory() {
   if (!copyHistoryRoot) return;
+  copyHistoryRoot.innerHTML = "";
   if (copyHistory.length === 0) {
-    copyHistoryRoot.innerHTML = '<div class="empty-state">Copied OTPs will appear here.</div>';
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "Copied OTPs will appear here.";
+    copyHistoryRoot.appendChild(empty);
     return;
   }
-  copyHistoryRoot.innerHTML = copyHistory.map((item) => `<div class="history-item"><strong>${item.label}</strong><span>${item.code} \u2022 ${item.at}</span></div>`).join("");
+  for (const item of copyHistory) {
+    const row = document.createElement("div");
+    row.className = "history-item";
+    const strong = document.createElement("strong");
+    strong.textContent = item.label;
+    const span = document.createElement("span");
+    span.textContent = `${item.code} \u2022 ${item.at}`;
+    row.append(strong, span);
+    copyHistoryRoot.appendChild(row);
+  }
 }
 function nextOrderValue(items = entries) {
   if (items.length === 0) return 1;
@@ -582,6 +598,16 @@ async function moveEntry(entryId, direction) {
   [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
   await replaceEntries(resequenceEntries(ordered));
 }
+function showRemoveConfirmation(message) {
+  if (!confirmRemoveDialog?.showModal) {
+    return Promise.resolve(window.confirm(message));
+  }
+  confirmRemoveMessage.textContent = message;
+  return new Promise((resolve) => {
+    confirmRemoveCallback = resolve;
+    confirmRemoveDialog.showModal();
+  });
+}
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
@@ -626,6 +652,8 @@ function createEntryNode(entry) {
   });
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
+      const confirmed = await showRemoveConfirmation(`Remove "${entry.label}" from the extension vault? This action cannot be undone.`);
+      if (!confirmed) return;
       await replaceEntries(entries.filter((item) => item.id !== entry.id));
       setMainStatus("Removed entry", "success");
     } catch (error) {
@@ -953,5 +981,11 @@ function bindEvents() {
     } catch (error) {
       setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
     }
+  });
+  confirmRemoveDialog?.addEventListener("close", () => {
+    if (!confirmRemoveCallback) return;
+    const accepted = confirmRemoveDialog.returnValue === "accept";
+    confirmRemoveCallback(accepted);
+    confirmRemoveCallback = null;
   });
 }
