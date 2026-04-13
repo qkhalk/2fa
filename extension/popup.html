@@ -86,6 +86,7 @@
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
       </div>
+      <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
       <div class="security-actions">
         <button id="change-passphrase-btn" class="ghost-btn hidden" type="button">Change Passphrase</button>
         <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
@@ -164,6 +165,19 @@
       <button id="cancel-edit" class="ghost-btn" type="button">Cancel</button>
       <button id="save-edit" class="primary-btn" type="submit">Save</button>
     </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-remove-dialog" class="panel hidden-dialog">
+    <form method="dialog">
+      <div class="section-head">
+        <h2>Remove Entry</h2>
+      </div>
+      <p id="confirm-remove-message" class="status">This action cannot be undone.</p>
+      <div class="row two-up">
+        <button id="cancel-remove" class="ghost-btn" value="cancel" type="submit">Cancel</button>
+        <button id="confirm-remove" class="primary-btn" value="accept" type="submit">Remove</button>
+      </div>
     </form>
   </dialog>
 </body>

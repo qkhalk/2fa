@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { createEncryptedBackup, encryptEntries } from "../../lib/vault.js";
+
 const FIXED_NOW = 1_700_000_000_000;
 const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
 const SECONDARY_SECRET = "NB2W45DFOIZA====";
@@ -299,27 +301,18 @@ test("removes partial encrypted artifacts when cleanup fails after encrypted wri
 });
 
 test("rolls back entries and passphrase when encrypted backup import persistence fails", async ({ page }) => {
-  await page.addInitScript(({ fixedNow, secret, passphrase }) => {
-    const RealDate = Date;
-    class MockDate extends RealDate {
-      constructor(...args) { super(...(args.length === 0 ? [fixedNow] : args)); }
-      static now() { return fixedNow; }
-    }
-    Object.setPrototypeOf(MockDate, RealDate);
-    window.Date = MockDate;
+  await loadApp(page);
+  await addEntry(page, { label: "Original:user@example.com", secret: PRIMARY_SECRET });
 
-    localStorage.setItem("personal_otp_vault_settings_v3", JSON.stringify({
-      persist: true,
-      encrypt: true,
-      unlockOnLoad: true,
-      blurCodes: false,
-      screenshotSafe: false,
-      clearClipboard: false,
-      sortBy: "pinned-alpha",
-      groupBy: "none",
-    }));
-    localStorage.setItem("personal_otp_vault_persist_warning_seen_v1", "true");
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
+  await page.evaluate(() => {
     window.__blockNextEncryptedWrite = false;
     const originalSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) {
@@ -329,16 +322,10 @@ test("rolls back entries and passphrase when encrypted backup import persistence
       }
       return originalSetItem.call(this, key, value);
     };
-  }, { fixedNow: FIXED_NOW, secret: PRIMARY_SECRET, passphrase: PASSPHRASE });
+  });
 
-  await page.goto("/");
-  await expect(page.locator("#unlock-panel")).toBeVisible();
-  await page.locator("#unlock-passphrase").fill(PASSPHRASE);
-  await page.getByRole("button", { name: "Unlock Vault" }).click();
-  await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
-
-  await addEntry(page, { label: "Original:user@example.com", secret: PRIMARY_SECRET });
   await expect(page.locator(".entry")).toHaveCount(1);
+  await expect(page.locator("#unlock-panel")).toBeHidden();
 
   const originalDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export Backup" }).click();
@@ -498,10 +485,10 @@ test("web security form must not silently change active passphrase for existing 
   await acceptPersistWarning(page);
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
-  await page.locator("#vault-passphrase").fill(newPassphrase);
-  await page.locator("#vault-passphrase-confirm").fill(newPassphrase);
-  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
-  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+  await expect(page.locator("#vault-passphrase")).toBeHidden();
+  await expect(page.locator("#vault-passphrase-confirm")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Change Passphrase" })).toBeVisible();
+  await expect(page.locator("#settings-status")).toContainText("Use Change Passphrase to rotate your vault secret");
 
   await page.reload();
   await expect(page.locator("#unlock-panel")).toBeVisible();
@@ -544,7 +531,52 @@ test("web dedicated passphrase change updates unlock passphrase", async ({ page 
   await expect(page.locator(".entry")).toHaveCount(1);
 });
 
-test("encrypted backup import with a different passphrase must not silently change active vault passphrase", async ({ page, browser }) => {
+test("web lock clears stale unlock success status", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Status:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await page.getByRole("button", { name: "Lock Vault" }).click();
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+  await expect(page.locator("#unlock-status")).toHaveText("");
+});
+
+test("web encrypted vault hides primary passphrase fields and directs users to change passphrase flow", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Passphrase:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+
+  await expect(page.locator("#vault-passphrase")).toBeHidden();
+  await expect(page.locator("#vault-passphrase-confirm")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Change Passphrase" })).toBeVisible();
+  await expect(page.locator("#settings-status")).toContainText("Use Change Passphrase to rotate your vault secret");
+});
+
+test("web privacy warning keeps focus on missing passphrase requirement before acceptance", async ({ page }) => {
+  await loadApp(page);
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+
+  await expect(page.locator("#privacy-dialog")).toBeHidden();
+  await expect(page.locator("#settings-status")).toContainText("Enter a passphrase to enable encryption");
+});
+
+test("encrypted backup import with a different passphrase must not silently change active vault passphrase", async ({ page }) => {
   const passphraseA = "correct horse battery";
   const passphraseB = "backup-only secret";
 
@@ -559,23 +591,20 @@ test("encrypted backup import with a different passphrase must not silently chan
   await acceptPersistWarning(page);
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
-  const backupContext = await browser.newContext();
-  const backupPage = await backupContext.newPage();
-  await loadApp(backupPage);
-  await addEntry(backupPage, { label: "VaultB:user@example.com", secret: SECONDARY_SECRET });
-  await backupPage.locator("#persist-toggle").check();
-  await backupPage.locator("#encrypt-toggle").check();
-  await backupPage.locator("#vault-passphrase").fill(passphraseB);
-  await backupPage.locator("#vault-passphrase-confirm").fill(passphraseB);
-  await backupPage.getByRole("button", { name: "Save Privacy Settings" }).click();
-  await acceptPersistWarning(backupPage);
-  await expect(backupPage.locator("#settings-status")).toContainText("Encrypted vault saved");
-
-  const backupDownloadPromise = backupPage.waitForEvent("download");
-  await backupPage.getByRole("button", { name: "Export Backup" }).click();
-  const backupDownload = await backupDownloadPromise;
-  const backupWithPassphraseB = await readFile(await backupDownload.path());
-  await backupContext.close();
+  const backupWithPassphraseB = Buffer.from(JSON.stringify(await createEncryptedBackup(
+    await encryptEntries([
+      {
+        id: "backup-b-1",
+        label: "VaultB:user@example.com",
+        secret: SECONDARY_SECRET,
+        digits: 6,
+        period: 30,
+        pinned: false,
+        tags: [],
+        createdAt: FIXED_NOW,
+      },
+    ], passphraseB)
+  )), "utf8");
 
   await page.reload();
   await expect(page.locator("#unlock-panel")).toBeVisible();
@@ -589,11 +618,12 @@ test("encrypted backup import with a different passphrase must not silently chan
     buffer: backupWithPassphraseB,
   });
   await expect(page.locator("#backup-review-dialog")).toBeVisible();
+  await expect(page.locator("#backup-import-mode")).toBeVisible();
   await page.locator("#backup-import-mode").selectOption("replace");
   await page.locator("#backup-import-passphrase").fill(passphraseB);
   await page.locator("#confirm-backup-import").click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.locator("#confirm-accept").click();
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
 
   await page.reload();
@@ -603,4 +633,54 @@ test("encrypted backup import with a different passphrase must not silently chan
 
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
   await expect(page.locator(".entry")).toHaveCount(1);
+});
+
+test("does not expose production debug controls", async ({ page }) => {
+  await loadApp(page);
+
+  await expect(page.locator("#debug-toggle")).toHaveCount(0);
+  await expect(page.locator("#debug-panel")).toHaveCount(0);
+  await expect(page.evaluate(() => "otpVaultDebug" in window)).resolves.toBe(false);
+});
+
+test("encrypted storage forces unlock on load", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: "Locked:user@example.com", secret: PRIMARY_SECRET });
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(PASSPHRASE);
+  await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
+  await page.locator("#unlock-on-load").uncheck();
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await acceptPersistWarning(page);
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await expect(page.locator("#unlock-on-load")).toBeChecked();
+  await expect(page.locator("#unlock-on-load")).toBeDisabled();
+
+  await page.reload();
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+});
+
+test("renders import preview labels as text instead of HTML", async ({ page }) => {
+  await loadApp(page);
+
+  const maliciousLabel = encodeURIComponent('Issuer:<img src=x onerror="window.__otpVaultPreviewXss = true">');
+  await page.locator("#uri").fill(`otpauth://totp/${maliciousLabel}?secret=${PRIMARY_SECRET}&period=30&digits=6`);
+  await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
+
+  await expect(page.locator("#import-dialog")).toBeVisible();
+  await expect(page.locator("#import-preview-list img")).toHaveCount(0);
+  await expect(page.evaluate(() => window.__otpVaultPreviewXss === true)).resolves.toBe(false);
+});
+
+test("renders copy history labels as text instead of HTML", async ({ page }) => {
+  await loadApp(page);
+  await addEntry(page, { label: 'Issuer:<img src=x onerror="window.__otpVaultHistoryXss = true">', secret: PRIMARY_SECRET });
+
+  await page.locator(".entry").first().getByRole("button", { name: "Copy" }).click();
+
+  await expect(page.locator("#copy-history img")).toHaveCount(0);
+  await expect(page.evaluate(() => window.__otpVaultHistoryXss === true)).resolves.toBe(false);
 });
