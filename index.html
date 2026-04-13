@@ -33,7 +33,6 @@
         <div class="hero-actions">
           <button type="button" id="install-app" class="btn primary">Install App</button>
           <button type="button" id="lock-app" class="btn ghost">Lock Vault</button>
-          <button type="button" id="debug-toggle" class="btn ghost" aria-expanded="false" aria-controls="debug-panel">Debug Panel</button>
         </div>
       </div>
 
@@ -202,6 +201,8 @@
                 <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
               </label>
             </div>
+            <p id="passphrase-guidance" class="helper-text hidden">This vault is already encrypted. Use Change Passphrase to rotate your vault secret.</p>
+
 
             <div class="actions actions-tight">
               <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
@@ -299,14 +300,6 @@
           <ul id="copy-history" class="history-list"></ul>
         </section>
 
-        <section id="debug-panel" class="rail-panel debug-panel hidden" aria-live="polite">
-          <div class="section-heading">
-            <p class="eyebrow">diagnostics</p>
-            <h2>Hidden Debug Feed</h2>
-          </div>
-          <p class="helper-text">Recent import, backup, and vault events. Useful when triaging QR or backup issues.</p>
-          <ul id="debug-list" class="debug-list"></ul>
-        </section>
       </aside>
     </section>
   </main>
