@@ -15,11 +15,11 @@ Personal OTP Vault is a local-first TOTP manager that runs as both a browser app
 
 ## Tech
 
-- Vanilla HTML/CSS/JS
-- Shared OTP and vault logic in `lib/`
-- `esbuild` for web and extension bundling
-- `Vitest` for unit tests
-- `Playwright` for browser and extension e2e tests
+- Vanilla HTML/CSS/JS with no build frameworks
+- Shared domain logic in `lib/` (TOTP generation + encryption)
+- `esbuild` for bundling (targets Chrome 114+, Safari 16+, Firefox 115+)
+- `Vitest` for unit tests (lib/ modules only)
+- `Playwright` for browser, extension, and offline e2e tests
 
 ## Getting Started
 
@@ -69,6 +69,8 @@ npm run build:icons
 
 ## Contributing
 
+See [Code Standards](docs/code-standards.md) for detailed conventions and development guidelines.
+
 Suggested flow:
 
 1. Create a branch from `main`
@@ -86,8 +88,16 @@ Suggested flow:
 - The release attaches the packaged extension archive for that version.
 - You can also trigger the same workflow manually from the Actions tab.
 
+## Documentation
+
+- [Codebase Summary](docs/codebase-summary.md) - Directory layout and architecture overview
+- [Code Standards](docs/code-standards.md) - Conventions and development guidelines
+- [System Architecture](docs/system-architecture.md) - Technical design and data flows
+- [Project Overview & PDR](docs/project-overview-pdr.md) - Product requirements and goals
+- [Project Roadmap](docs/project-roadmap.md) - Development themes and future proposals
+- [Offline Compatibility](docs/offline-compatibility.md) - Safari/iOS PWA behavior
+
 ## Notes
 
 - This repo keeps some local-only workflow files ignored from Git on purpose.
 - The app is designed for trusted personal devices. Encrypted storage is strongly recommended when persistence is enabled.
-- Safari/iOS offline notes are documented in `docs/offline-compatibility.md`.
