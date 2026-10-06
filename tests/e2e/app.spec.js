@@ -101,7 +101,7 @@ test("imports OTP URIs from surrounding text and supports search, pin, and remov
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
-  await expect(page.locator("#entries")).toContainText("No matching entries.");
+  await expect(page.locator("#entries")).toContainText("No matching entries");
 });
 
 test("persists encrypted vaults and unlocks after reload", async ({ page }) => {

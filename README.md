@@ -111,3 +111,4 @@ Suggested flow:
 
 - This repo keeps some local-only workflow files ignored from Git on purpose.
 - The app is designed for trusted personal devices. Encrypted storage is strongly recommended when persistence is enabled.
+- Duplicate detection matches entries by secret, digit count, and period — the label is not part of the match. A duplicate is skipped on manual add and during imports, so the same secret cannot be stored twice under different labels.

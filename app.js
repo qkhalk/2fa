@@ -394,7 +394,9 @@ async function migrateBackup(rawBackup) {
         }
       };
     }
-    if (rawBackup.encrypted === false && Array.isArray(rawBackup.entries)) {
+    // Real v1 exports always set encrypted:false; tolerate files where the
+    // field was dropped, as long as the entry shape still validates.
+    if (rawBackup.encrypted !== true && Array.isArray(rawBackup.entries)) {
       return {
         version: 1,
         encrypted: false,
@@ -928,13 +930,13 @@ function addCopyHistory(label, code) {
   }, ...copyHistory.filter((item) => item.label !== label)].slice(0, 6);
   renderCopyHistory();
 }
-function showEmptyState(message) {
+function showEmptyState(message, heading = "Vault ready for the first import") {
   entriesRoot.innerHTML = "";
   entriesRoot.innerHTML = `
     <section class="workspace-empty">
       <div class="workspace-empty-copy">
         <p class="entry-group-title">workspace</p>
-        <h3>Vault ready for the first import</h3>
+        <h3>${heading}</h3>
         <p>${message}</p>
         <div class="workspace-empty-actions">
           <button type="button" class="btn small" data-empty-action="focus-secret">Type a secret</button>
@@ -1000,7 +1002,7 @@ function createEntryNode(entry) {
       }, 1e3);
     } catch (error) {
       reportError("Copy failed", error);
-      setImportStatus(toUserMessage(error, "Could not copy OTP to clipboard"), "error");
+      showToast("Vault", toUserMessage(error, "Could not copy OTP to clipboard"), "error");
     }
   };
 
@@ -1098,7 +1100,7 @@ function renderEntries() {
   }
   const groups = getEntryGroups();
   if (groups.length === 0 || groups.every(([, groupEntries]) => groupEntries.length === 0)) {
-    showEmptyState("No matching entries.");
+    showEmptyState("Adjust the search or clear the filter to see your entries.", "No matching entries");
     return;
   }
   entriesRoot.innerHTML = "";
@@ -1247,6 +1249,7 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   const unique = [];
   const seen = new Set();
   let skipped = 0;
+  let invalid = 0;
 
   for (const uri of uris) {
     try {
@@ -1259,12 +1262,18 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
       seen.add(key);
       unique.push(entry);
     } catch {
+      invalid++;
       continue;
     }
   }
 
-  if (unique.length === 0) throw new Error(`No new entries found from ${sourceLabel}`);
-  return { candidates: unique, skipped, sourceLabel };
+  if (unique.length === 0) {
+    const details = [];
+    if (skipped > 0) details.push(`${skipped} duplicate${skipped === 1 ? "" : "s"} skipped`);
+    if (invalid > 0) details.push(`${invalid} invalid URI${invalid === 1 ? "" : "s"} ignored`);
+    throw new Error(`No new entries found from ${sourceLabel}${details.length > 0 ? ` (${details.join(", ")})` : ""}`);
+  }
+  return { candidates: unique, skipped, invalid, sourceLabel };
 }
 
 function renderImportPreview() {
@@ -1272,12 +1281,16 @@ function renderImportPreview() {
 
   const candidates = importPreviewState.candidates || importPreviewState;
   const skipped = importPreviewState.skipped || 0;
+  const invalid = importPreviewState.invalid || 0;
   const sourceLabel = importPreviewState.sourceLabel || "Import";
 
   importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
   let statusText = `${sourceLabel}: only valid, non-duplicate entries are shown below.`;
   if (skipped > 0) {
     statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
+  }
+  if (invalid > 0) {
+    statusText += ` Ignored ${invalid} invalid URI${invalid === 1 ? "" : "s"}.`;
   }
   importPreviewStatus.textContent = statusText;
   importPreviewList.innerHTML = "";
@@ -1572,8 +1585,14 @@ function renderBackupReview(backup) {
 async function importBackupFile(file, backup = null) {
   const resolvedBackup = backup || await (async () => {
     const text = await file.text();
+    let rawBackup;
     try {
-      return await parseBackupFile(JSON.parse(text));
+      rawBackup = JSON.parse(text);
+    } catch (error) {
+      throw new Error("Backup file is not valid JSON");
+    }
+    try {
+      return await parseBackupFile(rawBackup);
     } catch (error) {
       throw new Error(toUserMessage(error, "Backup file is invalid"));
     }
@@ -1595,9 +1614,15 @@ async function importBackupFile(file, backup = null) {
 }
 async function stageBackupImport(file) {
   const text = await file.text();
+  let rawBackup;
+  try {
+    rawBackup = JSON.parse(text);
+  } catch (error) {
+    throw new Error("Backup file is not valid JSON");
+  }
   let backup;
   try {
-    backup = await parseBackupFile(JSON.parse(text));
+    backup = await parseBackupFile(rawBackup);
   } catch (error) {
     throw new Error(toUserMessage(error, "Backup file is invalid"));
   }

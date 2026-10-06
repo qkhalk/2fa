@@ -107,6 +107,21 @@ describe("vault helpers", () => {
     expect(parsed.vault).toEqual(vault);
   });
 
+  it("parses legacy v1 plain backups that omit the encrypted field", async () => {
+    const legacyBackupWithoutEncryptedField = {
+      version: 1,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      entries,
+    };
+
+    const parsed = await parseBackupFile(legacyBackupWithoutEncryptedField);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.integrity).toBe("legacy");
+    expect(parsed.itemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
   it("rejects plain backups with entries missing required id", async () => {
     const backup = await createPlainBackup([omitEntryField("id")]);
 

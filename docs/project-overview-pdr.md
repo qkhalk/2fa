@@ -100,7 +100,7 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 - **Checksum Validation**: SHA-256 checksum for integrity verification
 - **Migration Support**: Automatic v1 to v2 backup format migration
 - **Import Strategies**: Merge with existing entries or replace vault
-- **Duplicate Detection**: Skip duplicate entries during import
+- **Duplicate Detection**: Skip duplicate entries during import (entries match when secret, digits, and period are identical; label is not part of the match)
 - **Review Dialog**: Preview changes before applying import
 
 #### FR6: User Interface
