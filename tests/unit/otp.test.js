@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compareEntries,
   extractOtpAuthUri,
   generateTotp,
   hasDuplicateEntry,
+  normalizeEntries,
   normalizeEntry,
   parseOtpAuthUri,
 } from "../../lib/otp.js";
@@ -102,6 +104,27 @@ describe("otp helpers", () => {
     });
 
     expect(entry.label).toBe("Secret JBSW...3PXP");
+  });
+
+  it("preserves the order field through normalizeEntry round-trips", () => {
+    const entry = normalizeEntry({ label: "GitHub:user", secret: "JBSWY3DPEHPK3PXP", digits: 6, period: 30, order: 7 });
+
+    expect(entry.order).toBe(7);
+    expect(normalizeEntries([entry])[0].order).toBe(7);
+  });
+
+  it("defaults the order field to 0 when an entry has no order", () => {
+    const entry = normalizeEntry({ label: "GitHub:user", secret: "JBSWY3DPEHPK3PXP", digits: 6, period: 30 });
+
+    expect(entry.order).toBe(0);
+  });
+
+  it("sorts by manual order when sortBy is custom", () => {
+    const later = normalizeEntry({ label: "A:one", secret: "JBSWY3DPEHPK3PXP", order: 2 });
+    const first = normalizeEntry({ label: "B:two", secret: "NB2W45DFOIZA", order: 1 });
+
+    expect(compareEntries(later, first, "custom")).toBe(1);
+    expect(compareEntries(first, later, "custom")).toBe(-1);
   });
 
   it("generates RFC 6238 test-vector codes", async () => {

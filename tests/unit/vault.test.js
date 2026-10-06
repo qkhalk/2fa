@@ -122,16 +122,22 @@ describe("vault helpers", () => {
     expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
   });
 
-  it("rejects plain backups with entries missing required id", async () => {
+  it("fills a generated id for plain backups with entries missing id", async () => {
     const backup = await createPlainBackup([omitEntryField("id")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].id).toBeTruthy();
   });
 
-  it("rejects plain backups with entries missing required label", async () => {
+  it("fills a fallback label for plain backups with entries missing label", async () => {
     const backup = await createPlainBackup([omitEntryField("label")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].label).toContain("Secret");
   });
 
   it("rejects plain backups with entries missing required secret", async () => {
@@ -164,20 +170,62 @@ describe("vault helpers", () => {
     await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
   });
 
-  it("rejects plain backups with entries missing required createdAt", async () => {
+  it("fills the current time for plain backups with entries missing createdAt", async () => {
     const backup = await createPlainBackup([omitEntryField("createdAt")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(typeof parsed.entries[0].createdAt).toBe("number");
   });
 
-  it("rejects plain backups with entries missing required digits", async () => {
+  it("fills default digits for plain backups with entries missing digits", async () => {
     const backup = await createPlainBackup([omitEntryField("digits")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].digits).toBe(6);
   });
 
-  it("rejects plain backups with entries missing required period", async () => {
+  it("fills default period for plain backups with entries missing period", async () => {
     const backup = await createPlainBackup([omitEntryField("period")]);
+    const parsed = await parseBackupFile(backup);
+
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].period).toBe(30);
+  });
+
+  it("skips invalid entries in mixed plain backups and reports invalidItemCount", async () => {
+    const backup = await createPlainBackup([entries[0], withEntryField("secret", "BAD*")]);
+    const parsed = await parseBackupFile(backup);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.itemCount).toBe(2);
+    expect(parsed.invalidItemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("skips invalid entries in legacy v1 mixed backups and reports invalidItemCount", async () => {
+    const legacyMixedBackup = {
+      version: 1,
+      encrypted: false,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      entries: [entries[0], withEntryField("secret", "BAD*")],
+    };
+
+    const parsed = await parseBackupFile(legacyMixedBackup);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.integrity).toBe("legacy");
+    expect(parsed.itemCount).toBe(2);
+    expect(parsed.invalidItemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects plain backups where every entry is invalid", async () => {
+    const backup = await createPlainBackup([withEntryField("secret", "BAD*")]);
 
     await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
   });
