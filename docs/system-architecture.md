@@ -1,6 +1,6 @@
 # System Architecture
 
-Last updated: 2026-06-27
+Last updated: 2026-10-06
 
 ## Three-Tier Architecture
 
@@ -67,15 +67,17 @@ chrome.storage.local.get('otp_extension_ui_v1')
 ```
 
 ### Storage Interface Pattern
-Both frontends implement the same logical operations but use different APIs:
+Both frontends implement the same logical operations but use different APIs.
+Root app reads go through `normalizeEntries` in `app.js`; extension reads go
+through `initialize` in `extension/popup.js`.
 
 ```javascript
 // Root app (synchronous)
-const entries = JSON.parse(localStorage.getItem('personal_otp_vault_entries_v2') || '[]');
+const entries = normalizeEntries(JSON.parse(localStorage.getItem('personal_otp_vault_entries_v2') || '[]'));
 
 // Extension (asynchronous)
 const result = await chrome.storage.local.get('otp_extension_entries_v2');
-const entries = result.otp_extension_entries_v2 || [];
+const entries = normalizeEntries(result.otp_extension_entries_v2 || []);
 ```
 
 ## Encryption Pipeline
@@ -219,13 +221,9 @@ sequenceDiagram
 ## Service Worker and Offline Architecture
 
 ### Service Worker Registration
-```javascript
-// sw.js - Service Worker Configuration
-Cache name: otp-vault-cache-v3
-Cached assets: index.html, app.bundle.js, styles.css, icons/
-Strategy: Cache-first for static assets, network for updates
-Offline fallback: Cached index.html
-```
+See `sw.js` for the owning implementation (`CACHE_NAME = "otp-vault-cache-v3"`,
+`APP_SHELL`). The cached app shell is the offline entry point; navigation
+requests fall back to the cached `index.html`.
 
 ### PWA Installation Flow
 ```mermaid
@@ -269,38 +267,44 @@ sequenceDiagram
 ```json
 {
   "version": 2,
-  "exportedAt": "2026-06-27T10:30:00.000Z",
-  "checksum": "sha256:abc123...",
-  "entries": [
-    {
-      "id": "entry_1687854000_abc123",
-      "issuer": "ExampleService",
-      "account": "user@example.com",
-      "secret": "JBSWY3DPEHPK3PXP",
-      "algorithm": "SHA1",
-      "digits": 6,
-      "period": 30,
-      "tags": ["personal", "important"]
-    }
-  ]
+  "encrypted": false,
+  "createdAt": "2026-06-27T10:30:00.000Z",
+  "itemCount": 1,
+  "checksum": "abc123...",
+  "payload": {
+    "schemaVersion": 1,
+    "entries": [
+      {
+        "id": "entry_1687854000_abc123",
+        "label": "ExampleService:user@example.com",
+        "secret": "JBSWY3DPEHPK3PXP",
+        "digits": 6,
+        "period": 30,
+        "pinned": false,
+        "tags": ["personal", "important"],
+        "createdAt": 1687854000000
+      }
+    ]
+  }
 }
 ```
 
+Encrypted backups keep the same envelope with `"encrypted": true`,
+`"itemCount": 0`, and `payload: { "schemaVersion": 1, "vault": { salt, iv, data } }`.
+See `buildBackupEnvelope` in `lib/vault.js` for the owning shape.
+
 ### Version 1 Migration
-The system automatically detects and migrates v1 backups:
-- **v1 checksum**: Simple MD5 hash (deprecated)
-- **v2 checksum**: SHA-256 with prefix
+The system automatically detects and migrates v1 backups (see `migrateBackup` in `lib/vault.js`):
+- **v1 backups**: No checksum; accepted as `"legacy"` integrity after strict entry-shape validation
+- **v2 checksum**: SHA-256 hex of the serialized `payload` (no prefix)
 - **Migration**: Automatic upgrade on import
 - **Fallback**: Graceful error if migration fails
 
 ### Checksum Validation
-```javascript
-// lib/vault.js - Checksum verification
-SHA-256(JSON.stringify(entries))
-Format: "sha256:" + hex_digest
-Purpose: Detect tampering and corruption
-Validation: Mandatory before import
-```
+See `parseBackupFile` in `lib/vault.js` for the owning logic:
+- v2 backups must carry `checksum`; it is compared against `SHA-256(JSON.stringify(payload))`
+- Purpose: detect tampering and corruption
+- Validation: mandatory before import for v2 backups
 
 ## Entry Render Loop
 
@@ -333,18 +337,22 @@ graph LR
 All storage keys follow the pattern: `{prefix}_{name}_v{version}`
 
 ### Root App Key Evolution
+`personal_otp_vault_settings_v3` is current; earlier settings generations were
+superseded without a preserved migration record in the current code. There is no
+v1 entries key in the implementation history — `personal_otp_vault_entries_v2`
+is the entries key used by `app.js`.
 ```
-personal_otp_vault_entries_v1 (deprecated)
 personal_otp_vault_entries_v2 (current)
 
 personal_otp_vault_encrypted_v1 (current)
 
-personal_otp_vault_settings_v1 (deprecated)
-personal_otp_vault_settings_v2 (deprecated)
 personal_otp_vault_settings_v3 (current)
 ```
 
 ### Extension Key Evolution
+`otp_extension_entries_v2` is current; `otp_extension_entries_v1` was its
+predecessor in the implementation history. The encrypted, settings, and UI keys
+have no prior generations in the current history.
 ```
 otp_extension_entries_v1 (deprecated)
 otp_extension_entries_v2 (current)
@@ -358,27 +366,13 @@ otp_extension_ui_v1 (current)
 ## Extension Service Worker
 
 ### Background Script Role
-```javascript
-// extension/background.js - Minimal service worker
-Purpose: Maintain extension context
-Permissions: storage, clipboardRead
-Lifecycle: Event-driven, not persistent
-Interactions: Responds to popup messages
-```
+See `extension/background.js` for the owning implementation: it is a minimal
+MV3 service worker that only registers an `onInstalled` listener. It performs
+no storage operations and handles no popup messages.
 
-### Message Passing
-```mermaid
-sequenceDiagram
-    participant Popup as Extension Popup
-    participant BG as Background Service Worker
-    participant Storage as chrome.storage.local
-
-    Popup->>BG: Request storage operation
-    BG->>Storage: Execute async storage API
-    Storage->>BG: Return result
-    BG->>Popup: Send response message
-    Popup->>Popup: Update UI
-```
+The popup talks to storage directly via `chrome.storage.local` (see
+`initialize`/`persistEntries` in `extension/popup.js`); there is no
+popup-to-background message-passing layer.
 
 ## Error Handling Architecture
 
@@ -417,7 +411,7 @@ graph TD
 ### Caching Strategy
 - **App shell**: Cache-first for instant loading
 - **TOTP generation**: Computed on-demand, not cached
-- **Entry display**: Virtual DOM updates for efficiency
+- **Entry display**: Direct DOM updates in `app.js`
 - **Search indexing**: Pre-computed for fast filtering
 
 ### Memory Management

@@ -81,10 +81,10 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 
 #### FR3: Entry Management
 - **Unique Identification**: Entry IDs as `entry_{timestamp}_{random}`
-- **Metadata**: Issuer, account, tags, pinning status
+- **Metadata**: Label, tags, pinning status, manual ordering (`order`; see `resequenceEntries` in `app.js`/`extension/popup.js`)
 - **Search**: Real-time filtering by issuer, account, or tags
 - **Grouping**: By issuer, tag, or no grouping
-- **Sorting**: Pinned-alphabetical, custom order, recent usage, or period
+- **Sorting**: Root app offers pinned-alphabetical, custom order, recent usage, and period (`index.html`); extension offers A-Z, manual, newest, and fastest timer (`extension/popup.html`)
 - **Bulk Operations**: Apply tags, remove entries, bulk actions
 
 #### FR4: Security Features
@@ -106,8 +106,9 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 #### FR6: User Interface
 - **Progressive Web App**: Installable PWA with offline support
 - **Visual Feedback**: Urgent indicator when codes expire within 10 seconds
-- **Copy History**: Track last 6 copied codes with optional 30-second auto-clear
-- **Keyboard Shortcuts**: `/` for search, `n` for new entry
+- **Copy History**: Track last 6 copied codes (root app; see `addCopyHistory` in `app.js`)
+- **Clipboard Clear**: Optional clear 30 seconds after copy (root app; see `index.html`)
+- **Keyboard Shortcuts**: `/` focuses search, `n` focuses the secret input (root app; see `bindEvents` in `app.js`)
 - **Toast Notifications**: Feedback for user actions and errors
 - **Confirm Dialogs**: Destructive action confirmation
 - **Online/Offline Status**: Visual indicator for connectivity state
