@@ -1,4 +1,4 @@
-// app.js
+// lib/otp.js
 var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
@@ -70,6 +70,10 @@ function createFallbackLabel(secret) {
   if (clean.length <= 8) return `Secret ${clean || "entry"}`;
   return `Secret ${clean.slice(0, 4)}...${clean.slice(-4)}`;
 }
+function nextOrderValueFrom(items = []) {
+  if (items.length === 0) return 1;
+  return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
+}
 function normalizeLabel(label, secret) {
   const clean = (label || "").trim();
   return clean || createFallbackLabel(secret);
@@ -104,7 +108,7 @@ function parseLabelParts(label) {
   if (clean.includes(":")) {
     const [issuer, ...rest] = clean.split(":");
     return {
-      issuer: issuer.trim() || clean,
+      issuer: issuer.trim() || "Unknown",
       account: rest.join(":").trim() || "No account label"
     };
   }
@@ -152,7 +156,7 @@ function parseOtpAuthUri(uri) {
       throw new OtpVaultError("OTP URI issuer does not match the label", { code: "URI_ISSUER_MISMATCH" });
     }
   }
-  const label = rawLabel ? rawLabel.includes(":") || !issuerParam ? rawLabel : `${issuerParam}:${rawLabel}` : issuerParam ? `${issuerParam}:Imported Account` : "Imported Account";
+  const label = rawLabel ? issuerParam && rawLabel.includes(":") ? labelParts.account === "No account label" ? `${labelParts.issuer === "Unknown" ? issuerParam : labelParts.issuer}:${labelParts.account}` : labelParts.issuer === "Unknown" ? `${issuerParam}:${labelParts.account}` : rawLabel : !issuerParam ? rawLabel : `${issuerParam}:${rawLabel}` : issuerParam ? `${issuerParam}:Imported Account` : "Imported Account";
   return normalizeEntry({
     label,
     secret: parsed.searchParams.get("secret") || "",
@@ -208,10 +212,6 @@ function compareEntries(a, b, sortBy = "pinned-alpha") {
   if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
 }
-function nextOrderValue(items = entries) {
-  if (items.length === 0) return 1;
-  return Math.max(...items.map((entry) => Number(entry.order) || 0)) + 1;
-}
 function base32ToBytes(base32) {
   const clean = sanitizeBase32(base32);
   if (!clean) return new Uint8Array();
@@ -261,6 +261,8 @@ function formatCode(code) {
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
 }
+
+// lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 var BACKUP_VERSION = 2;
@@ -332,6 +334,29 @@ function validateEncryptedPayload(payload) {
   }
   return payload;
 }
+function hasRequiredBackupSecret(secret) {
+  if (typeof secret !== "string") return false;
+  const normalizedSecret = sanitizeBase32(secret);
+  if (!normalizedSecret) return false;
+  try {
+    return base32ToBytes(normalizedSecret).length > 0;
+  } catch {
+    return false;
+  }
+}
+function hasRequiredBackupEntryShape(entry) {
+  return Boolean(entry) && typeof entry === "object" && typeof entry.id === "string" && entry.id.trim().length > 0 && typeof entry.label === "string" && entry.label.trim().length > 0 && hasRequiredBackupSecret(entry.secret) && Number.isInteger(entry.digits) && Number.isInteger(entry.period) && typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt);
+}
+function normalizeBackupEntriesStrict(entries2, { message, code }) {
+  if (!Array.isArray(entries2) || !entries2.every(hasRequiredBackupEntryShape)) {
+    throw new OtpVaultError(message, { code });
+  }
+  const normalizedEntries = normalizeEntries(entries2);
+  if (normalizedEntries.length !== entries2.length) {
+    throw new OtpVaultError(message, { code });
+  }
+  return normalizedEntries;
+}
 async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.crypto) {
   const safeCrypto = requireCrypto(cryptoApi);
   const normalizedPassphrase = normalizePassphrase(passphrase);
@@ -344,7 +369,10 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
       fromBase64(normalizedPayload.data)
     );
     const parsed = JSON.parse(decoder.decode(decrypted));
-    return normalizeEntries(parsed);
+    return normalizeBackupEntriesStrict(parsed, {
+      message: "Decrypted vault entries are invalid",
+      code: "VAULT_ENTRIES_INVALID"
+    });
   } catch (error) {
     if (error instanceof OtpVaultError) throw error;
     throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {
@@ -379,7 +407,7 @@ async function createEncryptedBackup(vaultPayload, cryptoApi = globalThis.crypto
 }
 async function migrateBackup(rawBackup) {
   if (rawBackup.version === 1) {
-    if (rawBackup.encrypted === true) {
+    if (rawBackup.encrypted === true && rawBackup.vault) {
       validateEncryptedPayload(rawBackup.vault);
       return {
         version: 1,
@@ -391,6 +419,18 @@ async function migrateBackup(rawBackup) {
         }
       };
     }
+    if (rawBackup.encrypted === true && rawBackup.payload?.vault) {
+      validateEncryptedPayload(rawBackup.payload.vault);
+      return {
+        version: 1,
+        encrypted: true,
+        createdAt: rawBackup.createdAt || null,
+        payload: {
+          schemaVersion: rawBackup.payload.schemaVersion || 1,
+          vault: rawBackup.payload.vault
+        }
+      };
+    }
     if (rawBackup.encrypted !== true && Array.isArray(rawBackup.entries)) {
       return {
         version: 1,
@@ -398,7 +438,18 @@ async function migrateBackup(rawBackup) {
         createdAt: rawBackup.createdAt || null,
         payload: {
           schemaVersion: 1,
-          entries: normalizeEntries(rawBackup.entries)
+          entries: rawBackup.entries
+        }
+      };
+    }
+    if (rawBackup.encrypted !== true && Array.isArray(rawBackup.payload?.entries)) {
+      return {
+        version: 1,
+        encrypted: false,
+        createdAt: rawBackup.createdAt || null,
+        payload: {
+          schemaVersion: rawBackup.payload.schemaVersion || 1,
+          entries: rawBackup.payload.entries
         }
       };
     }
@@ -442,7 +493,7 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
   if (!Array.isArray(payload.entries)) {
     throw new OtpVaultError("Backup entries are missing or invalid", { code: "BACKUP_ENTRIES" });
   }
-  const totalItems = payload.entries.length;
+  const totalItemCount = payload.entries.length;
   const entries2 = normalizeEntries(payload.entries);
   if (entries2.length === 0) {
     throw new OtpVaultError("Backup contains invalid entries", { code: "BACKUP_ENTRIES_INVALID" });
@@ -451,12 +502,14 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
     encrypted: false,
     integrity,
     createdAt: migrated.createdAt || null,
-    itemCount: totalItems,
-    invalidItemCount: totalItems - entries2.length,
+    itemCount: totalItemCount,
+    invalidItemCount: totalItemCount - entries2.length,
     schemaVersion: payload.schemaVersion || 1,
     entries: entries2
   };
 }
+
+// app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
@@ -1215,7 +1268,7 @@ async function replaceEntries(nextEntries) {
   await tick();
 }
 function buildManualEntry(input) {
-  const entry = normalizeEntry({ ...input, pinned: false, order: nextOrderValue() });
+  const entry = normalizeEntry({ ...input, pinned: false, order: nextOrderValueFrom(entries) });
   if (hasDuplicateEntry(entries, entry)) {
     throw new Error("This account already exists");
   }
@@ -1315,7 +1368,7 @@ function openImportPreview(previewResult, sourceLabel) {
 async function commitImportPreview(previewState = importPreviewState) {
   if (!previewState) return;
   const extraTags = normalizeTags(importPreviewTagsInput?.value);
-  let nextOrder = nextOrderValue();
+  let nextOrder = nextOrderValueFrom(entries);
   const rows = [...importPreviewList.querySelectorAll(".preview-item")];
   const candidates = previewState.candidates || previewState;
   const sourceLabel = previewState.sourceLabel || "Import";

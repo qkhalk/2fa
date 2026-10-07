@@ -84,7 +84,8 @@ function normalizeEntry(entry) {
     period: ensurePeriod(entry.period ?? 30),
     pinned: Boolean(entry.pinned),
     tags: normalizeTags(entry.tags),
-    createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now()
+    createdAt: typeof entry.createdAt === "number" ? entry.createdAt : Date.now(),
+    order: Number.isFinite(Number(entry.order)) ? Number(entry.order) : 0
   };
 }
 function normalizeEntries(entries2) {
