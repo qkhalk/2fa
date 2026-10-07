@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   compareEntries,
   extractOtpAuthUri,
+  generateEntryId,
   generateTotp,
   hasDuplicateEntry,
+  nextOrderValueFrom,
   normalizeEntries,
   normalizeEntry,
   parseOtpAuthUri,
@@ -125,6 +127,26 @@ describe("otp helpers", () => {
 
     expect(compareEntries(later, first, "custom")).toBe(1);
     expect(compareEntries(first, later, "custom")).toBe(-1);
+  });
+
+  it("generates crypto-random entry ids with high entropy", () => {
+    const id = generateEntryId();
+    expect(id).toMatch(/^entry_[0-9a-z]+_[0-9a-z]+$/);
+    expect(generateEntryId()).not.toBe(id);
+  });
+
+  it("mints 10k entry ids without collisions", () => {
+    const seen = new Set();
+    for (let index = 0; index < 10000; index += 1) {
+      const id = generateEntryId();
+      expect(seen.has(id)).toBe(false);
+      seen.add(id);
+    }
+  });
+
+  it("computes the next manual order value from item lists", () => {
+    expect(nextOrderValueFrom([])).toBe(1);
+    expect(nextOrderValueFrom([{ order: 3 }, { order: 7 }, {}])).toBe(8);
   });
 
   it("generates RFC 6238 test-vector codes", async () => {
