@@ -55,6 +55,7 @@
             <input id="qr-file" type="file" accept="image/*">
           </label>
           <button id="paste-uri" class="ghost-btn" type="button">Paste URI</button>
+          <button id="paste-ga" class="ghost-btn" type="button">Paste GA Export</button>
         </div>
         <button type="submit" class="primary-btn">Add Entry</button>
       </form>
@@ -219,6 +220,20 @@
       <div class="row two-up">
         <button id="cancel-remove" class="ghost-btn" value="cancel" type="submit">Cancel</button>
         <button id="confirm-remove" class="primary-btn" value="accept" type="submit">Remove</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="migration-preview-dialog" class="panel hidden-dialog">
+    <form id="migration-preview-form">
+      <div class="section-head">
+        <h2>Import Google Authenticator</h2>
+      </div>
+      <p id="migration-preview-status" class="status"></p>
+      <div id="migration-preview-list"></div>
+      <div class="row two-up">
+        <button id="migration-cancel" class="ghost-btn" value="cancel" type="submit">Cancel</button>
+        <button id="migration-import" class="primary-btn" value="accept" type="submit">Import</button>
       </div>
     </form>
   </dialog>

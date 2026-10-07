@@ -10322,6 +10322,19 @@ function base32ToBytes(base32) {
   }
   return new Uint8Array(bytes);
 }
+var MIGRATION_URI_REGEX = /otpauth-migration:\/\/[^\s"'<>]+/gi;
+function extractMigrationUris(rawText) {
+  const found = /* @__PURE__ */ new Set();
+  const raw = (rawText || "").trim();
+  if (!raw) return [];
+  for (const match of raw.matchAll(MIGRATION_URI_REGEX)) {
+    found.add(match[0]);
+  }
+  for (const match of safeDecode(raw).matchAll(MIGRATION_URI_REGEX)) {
+    found.add(match[0]);
+  }
+  return [...found];
+}
 function toCounterBytes(counter) {
   const bytes = new Uint8Array(8);
   let value = BigInt(counter);
@@ -10345,6 +10358,19 @@ function truncateDigest(digest, digits) {
   const binary = (digest[offset] & 127) << 24 | digest[offset + 1] << 16 | digest[offset + 2] << 8 | digest[offset + 3];
   return (binary % 10 ** digits).toString().padStart(digits, "0");
 }
+async function generateHotp(secret, counter, digits, algorithm = "SHA1", cryptoApi = globalThis.crypto) {
+  const normalizedSecret = ensureBase32Secret(secret);
+  const normalizedCounter = ensureCounter(counter);
+  const normalizedDigits = ensureDigits(digits);
+  const normalizedAlgorithm = ensureAlgorithm(algorithm);
+  const digest = await hmac(
+    base32ToBytes(normalizedSecret),
+    toCounterBytes(normalizedCounter),
+    normalizedAlgorithm,
+    cryptoApi
+  );
+  return truncateDigest(digest, normalizedDigits);
+}
 async function generateTotp(secret, digits, period, now, algorithm = "SHA1", cryptoApi = globalThis.crypto) {
   const normalizedSecret = ensureBase32Secret(secret);
   const normalizedDigits = ensureDigits(digits);
@@ -10363,6 +10389,384 @@ function formatCode(code) {
   if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
+}
+
+// lib/migration.js
+var MAX_BATCH_SIZE = 10;
+var MAX_STITCHED_ENTRIES = 500;
+var MAX_PAYLOAD_BYTES = 64 * 1024;
+var MAX_SAFE_COUNTER2 = BigInt(Number.MAX_SAFE_INTEGER);
+var ALGORITHM_NAMES = { 0: "SHA1", 1: "SHA1", 2: "SHA256", 3: "SHA512" };
+var BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+var BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var BASE64_LOOKUP = new Int8Array(256).fill(-1);
+for (let index = 0; index < BASE64_ALPHABET.length; index += 1) {
+  BASE64_LOOKUP[BASE64_ALPHABET.charCodeAt(index)] = index;
+}
+var TEXT_DECODER = new TextDecoder("utf-8");
+function malformed(message) {
+  return new OtpVaultError(message, { code: "MIGRATION_DATA_MALFORMED" });
+}
+function toInt32(value) {
+  return Number(BigInt.asIntN(32, value));
+}
+function varint(bytes, pos) {
+  let value = 0n;
+  let shift = 0n;
+  for (; ; ) {
+    if (pos >= bytes.length) {
+      throw malformed("Migration payload ends inside a varint");
+    }
+    const byte = bytes[pos];
+    pos += 1;
+    value |= BigInt(byte & 127) << shift;
+    if ((byte & 128) === 0) return [value, pos];
+    shift += 7n;
+    if (shift >= 70n) {
+      throw malformed("Migration payload contains an overlong varint");
+    }
+  }
+}
+function skipField(bytes, pos, wireType) {
+  if (wireType === 0) return varint(bytes, pos)[1];
+  if (wireType === 1) {
+    if (pos + 8 > bytes.length) throw malformed("Migration payload has a truncated fixed64 field");
+    return pos + 8;
+  }
+  if (wireType === 2) return lenBytes(bytes, pos)[1];
+  if (wireType === 5) {
+    if (pos + 4 > bytes.length) throw malformed("Migration payload has a truncated fixed32 field");
+    return pos + 4;
+  }
+  throw malformed(`Migration payload uses unsupported wire type ${wireType}`);
+}
+function lenBytes(bytes, pos) {
+  const [length, start] = varint(bytes, pos);
+  const end = start + Number(length);
+  if (end > bytes.length) {
+    throw malformed("Migration payload has a truncated length-delimited field");
+  }
+  return [bytes.subarray(start, end), end];
+}
+function decodeOtpParameters(bytes) {
+  const params = { secret: new Uint8Array(0), name: "", issuer: "", algorithm: 0, digits: 0, type: 0, counter: 0n };
+  let pos = 0;
+  while (pos < bytes.length) {
+    const [key, next] = varint(bytes, pos);
+    pos = next;
+    const field = Number(key >> 3n);
+    const wireType = Number(key & 7n);
+    if (field === 1 && wireType === 2) {
+      [params.secret, pos] = lenBytes(bytes, pos);
+    } else if ((field === 2 || field === 3) && wireType === 2) {
+      const [value, after] = lenBytes(bytes, pos);
+      pos = after;
+      const text = TEXT_DECODER.decode(value);
+      if (field === 2) params.name = text;
+      else params.issuer = text;
+    } else if (field >= 4 && field <= 6 && wireType === 0) {
+      const [value, after] = varint(bytes, pos);
+      pos = after;
+      if (field === 4) params.algorithm = Number(value);
+      else if (field === 5) params.digits = Number(value);
+      else params.type = Number(value);
+    } else if (field === 7 && wireType === 0) {
+      const [value, after] = varint(bytes, pos);
+      pos = after;
+      params.counter = BigInt.asIntN(64, value);
+    } else {
+      pos = skipField(bytes, pos, wireType);
+    }
+  }
+  return params;
+}
+function scanPayload(bytes) {
+  const entryRanges = [];
+  let version;
+  let batchSize;
+  let batchIndex;
+  let batchId;
+  let pos = 0;
+  while (pos < bytes.length) {
+    const [key, next] = varint(bytes, pos);
+    pos = next;
+    const field = Number(key >> 3n);
+    const wireType = Number(key & 7n);
+    if (field === 1 && wireType === 2) {
+      const [length, start] = varint(bytes, pos);
+      const end = start + Number(length);
+      if (end > bytes.length) throw malformed("Migration payload has a truncated entry");
+      entryRanges.push([start, end]);
+      pos = end;
+    } else if (field >= 2 && field <= 5 && wireType === 0) {
+      const [value, after] = varint(bytes, pos);
+      pos = after;
+      if (field === 2) version = value;
+      else if (field === 3) batchSize = value;
+      else if (field === 4) batchIndex = value;
+      else batchId = value;
+    } else {
+      pos = skipField(bytes, pos, wireType);
+    }
+  }
+  return { entryRanges, version, batchSize, batchIndex, batchId };
+}
+function decodeMigrationPayload(bytes) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw malformed("Migration payload must be raw bytes");
+  }
+  if (bytes.length > MAX_PAYLOAD_BYTES) {
+    throw malformed(`Migration payload exceeds the ${MAX_PAYLOAD_BYTES} byte limit`);
+  }
+  const scanned = scanPayload(bytes);
+  const batchSize = scanned.batchSize === void 0 ? 1 : toInt32(scanned.batchSize);
+  const batchIndex = scanned.batchIndex === void 0 ? 0 : toInt32(scanned.batchIndex);
+  if (batchSize < 1 || batchSize > MAX_BATCH_SIZE) {
+    throw malformed(`Migration batch size ${batchSize} is outside the allowed range 1-${MAX_BATCH_SIZE}`);
+  }
+  if (batchIndex < 0 || batchIndex >= batchSize) {
+    throw malformed(`Migration batch index ${batchIndex} is outside the batch size ${batchSize}`);
+  }
+  const entries2 = scanned.entryRanges.map(([start, end]) => decodeOtpParameters(bytes.subarray(start, end)));
+  return {
+    entries: entries2,
+    version: scanned.version === void 0 ? 0 : toInt32(scanned.version),
+    batchSize,
+    batchIndex,
+    batchId: scanned.batchId === void 0 ? 0 : toInt32(scanned.batchId)
+  };
+}
+function b64DecodeBytes(value) {
+  if (typeof value !== "string") {
+    throw malformed("Migration data must be a base64 string");
+  }
+  const normalized = value.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+  if (normalized.length % 4 === 1) {
+    throw malformed("Migration data is not valid base64");
+  }
+  if (normalized.length > Math.ceil(MAX_PAYLOAD_BYTES / 3) * 4) {
+    throw malformed(`Migration data exceeds the ${MAX_PAYLOAD_BYTES} byte payload limit`);
+  }
+  const out = new Uint8Array(Math.ceil(normalized.length * 3 / 4));
+  let outLength = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const code = normalized.charCodeAt(index);
+    const decoded = code < 256 ? BASE64_LOOKUP[code] : -1;
+    if (decoded === -1) {
+      throw malformed("Migration data is not valid base64");
+    }
+    acc = acc << 6 | decoded;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[outLength] = acc >>> bits & 255;
+      outLength += 1;
+    }
+  }
+  return out.subarray(0, outLength);
+}
+function parseMigrationUri(uri) {
+  const raw = typeof uri === "string" ? uri.trim() : "";
+  if (!raw.toLowerCase().startsWith("otpauth-migration://")) {
+    throw new OtpVaultError("URI must be an otpauth-migration:// export URI", { code: "MIGRATION_URI_INVALID" });
+  }
+  const queryIndex = raw.indexOf("?");
+  if (queryIndex === -1) {
+    throw new OtpVaultError("Migration URI is missing the data parameter", { code: "MIGRATION_URI_INVALID" });
+  }
+  let dataParam;
+  for (const pair of raw.slice(queryIndex + 1).split("&")) {
+    const equals = pair.indexOf("=");
+    const key = equals === -1 ? pair : pair.slice(0, equals);
+    if (key.toLowerCase() === "data") {
+      dataParam = equals === -1 ? "" : pair.slice(equals + 1);
+      break;
+    }
+  }
+  if (!dataParam) {
+    throw new OtpVaultError("Migration URI is missing the data parameter", { code: "MIGRATION_URI_INVALID" });
+  }
+  let data = dataParam;
+  try {
+    data = decodeURIComponent(dataParam);
+  } catch {
+  }
+  data = data.replace(/ /g, "+");
+  const payload = decodeMigrationPayload(b64DecodeBytes(data));
+  const { entries: entries2, warnings } = filterMigrationEntries(payload.entries);
+  return {
+    entries: entries2,
+    warnings,
+    batch: { size: payload.batchSize, index: payload.batchIndex, id: payload.batchId },
+    // Raw decoded payload bytes so multi-QR camera flows can accumulate and
+    // stitch via stitchMigrationBatches without re-parsing the URI.
+    payloadBytes: b64DecodeBytes(data)
+  };
+}
+function entryDisplayName(params) {
+  const name = (params.name || "").trim();
+  if (name) return name;
+  const issuer = (params.issuer || "").trim();
+  return issuer || "unnamed entry";
+}
+function filterMigrationEntries(rawEntries) {
+  const entries2 = [];
+  const warnings = [];
+  for (const params of rawEntries) {
+    const label = entryDisplayName(params);
+    if (!params.secret.length) {
+      warnings.push(`Skipped "${label}": entry has no secret`);
+      continue;
+    }
+    if (params.algorithm === 4) {
+      warnings.push(`Skipped "${label}": unsupported algorithm (MD5)`);
+      continue;
+    }
+    if (params.algorithm > 3) {
+      warnings.push(`Skipped "${label}": unsupported algorithm (code ${params.algorithm})`);
+      continue;
+    }
+    if (params.digits > 2) {
+      warnings.push(`Skipped "${label}": unsupported digits code ${params.digits}`);
+      continue;
+    }
+    if (params.type > 2) {
+      warnings.push(`Skipped "${label}": unsupported OTP type code ${params.type}`);
+      continue;
+    }
+    if (params.counter < 0n) {
+      warnings.push(`Skipped "${label}": invalid negative HOTP counter`);
+      continue;
+    }
+    if (params.counter > MAX_SAFE_COUNTER2) {
+      warnings.push(`Skipped "${label}": HOTP counter exceeds the supported range`);
+      continue;
+    }
+    entries2.push(params);
+  }
+  return { entries: entries2, warnings };
+}
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function bytesToBase32(bytes) {
+  let output = "";
+  let acc = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    acc = acc << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[acc >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += BASE32_ALPHABET[acc << 5 - bits & 31];
+  return output;
+}
+function buildMigrationLabel(params) {
+  const issuer = (params.issuer || "").trim();
+  const name = (params.name || "").trim();
+  if (!issuer) {
+    const colon = name.indexOf(":");
+    if (colon === -1) return name;
+    const nameIssuer = name.slice(0, colon).trim();
+    const account = name.slice(colon + 1).trim();
+    if (!account) return nameIssuer;
+    if (!nameIssuer) return account;
+    return `${nameIssuer}:${account}`;
+  }
+  if (!name) return issuer;
+  if (name.toLowerCase().startsWith(`${issuer.toLowerCase()}:`)) return name;
+  return `${issuer}:${name}`;
+}
+function migrationToEntryCandidates(entries2) {
+  const source = Array.isArray(entries2) ? entries2 : [];
+  return source.map((params) => {
+    const algorithm = ALGORITHM_NAMES[params.algorithm];
+    if (!algorithm) {
+      throw malformed(`Unsupported migration algorithm code ${params.algorithm}`);
+    }
+    if (params.digits !== 0 && params.digits !== 1 && params.digits !== 2) {
+      throw malformed(`Unsupported migration digits code ${params.digits}`);
+    }
+    if (params.type !== 0 && params.type !== 1 && params.type !== 2) {
+      throw malformed(`Unsupported migration OTP type code ${params.type}`);
+    }
+    const counter = BigInt(params.counter ?? 0n);
+    if (counter < 0n || counter > MAX_SAFE_COUNTER2) {
+      throw malformed("Migration HOTP counter is outside the supported range");
+    }
+    return {
+      label: buildMigrationLabel(params),
+      secret: bytesToBase32(params.secret),
+      digits: params.digits === 2 ? 8 : 6,
+      // QR enum: 0 unspecified, 1 = SIX, 2 = EIGHT
+      period: 30,
+      // the payload has no period field; GA assumes 30s
+      // CRITICAL: the migration QR enum order (1 = HOTP, 2 = TOTP) is the
+      // OPPOSITE of Google Authenticator's internal SQLite DB order
+      // (TOTP = 0, HOTP = 1 — see Aegis GoogleAuthImporter). Never share one
+      // mapping between the two formats.
+      type: params.type === 1 ? "hotp" : "totp",
+      counter: Number(counter),
+      algorithm
+    };
+  });
+}
+function stitchMigrationBatches(payloads) {
+  if (!Array.isArray(payloads)) {
+    throw malformed("Migration payloads must be an array of byte arrays");
+  }
+  const warnings = [];
+  const groups = /* @__PURE__ */ new Map();
+  for (const bytes of payloads) {
+    const payload = decodeMigrationPayload(bytes);
+    const { entries: entries3, warnings: entryWarnings } = filterMigrationEntries(payload.entries);
+    warnings.push(...entryWarnings);
+    let group = groups.get(payload.batchId);
+    if (!group) {
+      group = { id: payload.batchId, size: payload.batchSize, scanned: /* @__PURE__ */ new Set(), buckets: /* @__PURE__ */ new Map() };
+      groups.set(payload.batchId, group);
+    }
+    if (group.size !== payload.batchSize) {
+      throw malformed("Migration payloads disagree on the batch size");
+    }
+    group.scanned.add(payload.batchIndex);
+    if (!group.buckets.has(payload.batchIndex)) {
+      group.buckets.set(payload.batchIndex, []);
+    }
+    group.buckets.get(payload.batchIndex).push(...entries3);
+  }
+  const entries2 = [];
+  const batches = [];
+  const seen = /* @__PURE__ */ new Set();
+  let capped = false;
+  outer: for (const group of groups.values()) {
+    batches.push({
+      id: group.id,
+      size: group.size,
+      scannedIndexes: [...group.scanned].sort((a, b) => a - b)
+    });
+    for (let index = 0; index < group.size; index += 1) {
+      for (const params of group.buckets.get(index) || []) {
+        if (entries2.length >= MAX_STITCHED_ENTRIES) {
+          capped = true;
+          break outer;
+        }
+        const key = `${bytesToHex(params.secret)}|${params.name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        entries2.push(params);
+      }
+    }
+  }
+  if (capped) {
+    warnings.push(`Stopped at the ${MAX_STITCHED_ENTRIES} entry limit; remaining entries were not imported`);
+  }
+  return { entries: entries2, warnings, batches };
 }
 
 // lib/vault.js
@@ -10720,6 +11124,7 @@ var counterField = document.getElementById("counter-field");
 var algorithmSelect = document.getElementById("algorithm");
 var uriInput = document.getElementById("uri");
 var parseUriBtn = document.getElementById("parse-uri");
+var importGaBtn = document.getElementById("import-ga");
 var importClipboardBtn = document.getElementById("import-clipboard");
 var qrFileInput = document.getElementById("qr-file");
 var qrUrlInput = document.getElementById("qr-url");
@@ -11674,11 +12079,95 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   }
   return { candidates: unique, skipped, invalid, sourceLabel };
 }
+var migrationScanState = null;
+function collectMigrationPayloads(rawText) {
+  const uris = extractMigrationUris(rawText);
+  if (uris.length === 0) return { payloads: [], warnings: [] };
+  const payloads = [];
+  const warnings = [];
+  for (const uri of uris) {
+    try {
+      payloads.push(parseMigrationUri(uri).payloadBytes);
+    } catch (error) {
+      warnings.push(toUserMessage(error, "A migration QR could not be read"));
+    }
+  }
+  return { payloads, warnings };
+}
+function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
+  const stitched = stitchMigrationBatches(payloadByteArrays);
+  const warnings = [...stitched.warnings];
+  if (stitched.entries.length === 0) {
+    throw new Error(`No importable entries found in the ${sourceLabel} export${warnings.length ? `: ${warnings.join(" ")}` : ""}`);
+  }
+  const candidates = [];
+  let skipped = 0;
+  let invalid = 0;
+  for (const params of stitched.entries) {
+    try {
+      const candidate = migrationToEntryCandidates([params])[0];
+      const entry = normalizeEntry(candidate);
+      if (hasDuplicateEntry(entries, entry) || candidates.some((existing) => entryKey(existing) === entryKey(entry))) {
+        candidates.push({ ...entry, duplicateHint: true });
+        skipped += 1;
+        continue;
+      }
+      candidates.push(entry);
+    } catch (error) {
+      invalid += 1;
+      warnings.push(toUserMessage(error, "An entry could not be mapped"));
+    }
+  }
+  openImportPreview({ candidates, skipped, invalid, warnings, sourceLabel }, sourceLabel);
+}
+function finishMigrationCameraScan() {
+  const state = migrationScanState;
+  migrationScanState = null;
+  stopCameraScan();
+  if (!state || state.payloads.length === 0) return;
+  try {
+    stageMigrationPayloads(state.payloads, "Camera");
+  } catch (error) {
+    reportError("Camera migration import failed", error);
+    setImportStatus(toUserMessage(error, "Could not import the Google Authenticator scan"), "error");
+  }
+}
+function handleMigrationScanFrame(uri) {
+  try {
+    const parsed = parseMigrationUri(uri);
+    if (!migrationScanState) {
+      migrationScanState = { payloads: [], seenKeys: /* @__PURE__ */ new Set(), total: null };
+    }
+    const payloadKey = `${parsed.batch.id}:${parsed.batch.index}`;
+    if (migrationScanState.seenKeys.has(payloadKey)) {
+      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+      return;
+    }
+    if (migrationScanState.total !== null && parsed.batch.size !== migrationScanState.total) {
+      setImportStatus("QR codes from different exports detected \u2014 restart the scan with one export.", "error");
+      migrationScanState = null;
+      return;
+    }
+    migrationScanState.total = parsed.batch.size;
+    migrationScanState.seenKeys.add(payloadKey);
+    migrationScanState.payloads.push(parsed.payloadBytes);
+    if (migrationScanState.seenKeys.size >= migrationScanState.total) {
+      setImportStatus("All QR codes scanned.", "success");
+      finishMigrationCameraScan();
+    } else {
+      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+    }
+  } catch (error) {
+    reportError("Migration scan failed", error);
+    setImportStatus(toUserMessage(error, "Could not read the Google Authenticator QR"), "error");
+  }
+}
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
   const candidates = importPreviewState.candidates || importPreviewState;
   const skipped = importPreviewState.skipped || 0;
   const invalid = importPreviewState.invalid || 0;
+  const warnings = importPreviewState.warnings || [];
   const sourceLabel = importPreviewState.sourceLabel || "Import";
   importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
   let statusText = `${sourceLabel}: only valid, non-duplicate entries are shown below.`;
@@ -11686,7 +12175,10 @@ function renderImportPreview() {
     statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
   }
   if (invalid > 0) {
-    statusText += ` Ignored ${invalid} invalid URI${invalid === 1 ? "" : "s"}.`;
+    statusText += ` Ignored ${invalid} invalid entr${invalid === 1 ? "y" : "ies"}.`;
+  }
+  if (warnings.length > 0) {
+    statusText += ` ${warnings.join(" ")}`;
   }
   importPreviewStatus.textContent = statusText;
   importPreviewList.innerHTML = "";
@@ -11699,9 +12191,9 @@ function renderImportPreview() {
     const includeInput = document.createElement("input");
     includeInput.type = "checkbox";
     includeInput.className = "preview-include";
-    includeInput.checked = true;
+    includeInput.checked = !entry.duplicateHint;
     const includeText = document.createElement("span");
-    includeText.textContent = "Import this entry";
+    includeText.textContent = entry.duplicateHint ? "Already in vault" : "Import this entry";
     includeLabel.append(includeInput, includeText);
     const labelField = document.createElement("label");
     const labelText = document.createElement("span");
@@ -11782,6 +12274,14 @@ async function decodeQrFromBlob(blob) {
 }
 async function importFromQrBlob(blob, sourceLabel) {
   const qrText = await decodeQrFromBlob(blob);
+  const migration = collectMigrationPayloads(qrText);
+  if (migration.payloads.length > 0) {
+    stageMigrationPayloads(migration.payloads, sourceLabel);
+    return;
+  }
+  if (migration.warnings.length > 0) {
+    throw new Error(migration.warnings.join(" "));
+  }
   const uris = extractOtpAuthUris(qrText);
   if (uris.length === 0) throw new Error("QR code was detected but does not contain a valid OTP URI");
   const candidates = buildPreviewCandidatesFromUris(uris, sourceLabel);
@@ -12070,6 +12570,11 @@ async function startCameraScan() {
     ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const result = (0, import_jsqr.default)(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+    const migrationUris = extractMigrationUris(result?.data || "");
+    if (migrationUris.length > 0) {
+      handleMigrationScanFrame(migrationUris[0]);
+      return;
+    }
     const otpUri = extractOtpAuthUri(result?.data || "");
     if (!otpUri) {
       cameraDetection = { uri: "", hits: 0 };
@@ -12158,6 +12663,12 @@ function bindEvents() {
   });
   parseUriBtn.addEventListener("click", async () => {
     try {
+      const migration = collectMigrationPayloads(uriInput.value);
+      if (migration.payloads.length > 0) {
+        stageMigrationPayloads(migration.payloads, "URI");
+        uriInput.value = "";
+        return;
+      }
       const uris = extractOtpAuthUris(uriInput.value);
       if (uris.length === 0) throw new Error("No valid otpauth:// URI found");
       openImportPreview(buildPreviewCandidatesFromUris(uris, "URI"), "URI");
@@ -12165,6 +12676,24 @@ function bindEvents() {
     } catch (error) {
       reportError("URI import failed", error);
       setImportStatus(toUserMessage(error, "Invalid URI"), "error");
+    }
+  });
+  importGaBtn?.addEventListener("click", async () => {
+    try {
+      const source = uriInput.value.trim();
+      if (!source) {
+        throw new Error("Paste your Google Authenticator export (the otpauth-migration:// text or URI) first");
+      }
+      const migration = collectMigrationPayloads(source);
+      if (migration.payloads.length === 0) {
+        throw new Error(migration.warnings[0] || "No Google Authenticator export found in the pasted text");
+      }
+      setImportStatus("Decoding Google Authenticator export...");
+      stageMigrationPayloads(migration.payloads, "Google Authenticator");
+      uriInput.value = "";
+    } catch (error) {
+      reportError("GA import failed", error);
+      setImportStatus(toUserMessage(error, "Could not import the Google Authenticator export"), "error");
     }
   });
   qrFileInput.addEventListener("change", async () => {
@@ -12209,6 +12738,11 @@ function bindEvents() {
         }
       }
       const text = await navigator.clipboard.readText();
+      const migration = collectMigrationPayloads(text);
+      if (migration.payloads.length > 0) {
+        stageMigrationPayloads(migration.payloads, "Clipboard");
+        return;
+      }
       const uris = extractOtpAuthUris(text);
       if (uris.length === 0) throw new Error("Clipboard does not contain a valid OTP URI or QR image");
       openImportPreview(buildPreviewCandidatesFromUris(uris, "Clipboard"), "Clipboard");
@@ -12228,6 +12762,10 @@ function bindEvents() {
     }
   });
   stopCameraBtn.addEventListener("click", () => {
+    if (migrationScanState?.payloads.length > 0) {
+      finishMigrationCameraScan();
+      return;
+    }
     stopCameraScan();
     setImportStatus("Camera stopped");
   });

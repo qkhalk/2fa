@@ -1,6 +1,8 @@
 import {
+  extractMigrationUris,
   extractOtpAuthUri,
   formatCode,
+  generateHotp,
   generateTotp,
   getIssuerInitials,
   hasDuplicateEntry,
@@ -12,6 +14,11 @@ import {
   reportError,
   toUserMessage,
 } from "../lib/otp.js";
+import {
+  migrationToEntryCandidates,
+  parseMigrationUri,
+  stitchMigrationBatches,
+} from "../lib/migration.js";
 import {
   assessPassphraseStrength,
   decryptVaultEntries,
@@ -83,6 +90,11 @@ const cancelEditBtn = document.getElementById("cancel-edit");
 const saveEditBtn = document.getElementById("save-edit");
 const confirmRemoveDialog = document.getElementById("confirm-remove-dialog");
 const confirmRemoveMessage = document.getElementById("confirm-remove-message");
+const pasteGaBtn = document.getElementById("paste-ga");
+const migrationPreviewDialog = document.getElementById("migration-preview-dialog");
+const migrationPreviewForm = document.getElementById("migration-preview-form");
+const migrationPreviewStatus = document.getElementById("migration-preview-status");
+const migrationPreviewList = document.getElementById("migration-preview-list");
 
 let entries = [];
 let entryNodes = new Map();
@@ -92,6 +104,7 @@ let currentPassphrase = "";
 let copyHistory = [];
 let confirmRemoveCallback = null;
 let lastActivity = Date.now();
+let migrationPreviewState = null;
 
 initialize();
 
@@ -238,6 +251,105 @@ function writeUnlockGuard(guard) {
 
 function unlockBackoffSeconds(attempts) {
   return Math.min(60, 2 ** Math.max(0, attempts - 3));
+}
+
+// --- Google Authenticator migration import (Phase 4) ---
+
+function collectMigrationPayloads(rawText) {
+  const uris = extractMigrationUris(rawText);
+  if (uris.length === 0) return { payloads: [], warnings: [] };
+  const payloads = [];
+  const warnings = [];
+  for (const uri of uris) {
+    try {
+      payloads.push(parseMigrationUri(uri).payloadBytes);
+    } catch (error) {
+      warnings.push(toUserMessage(error, "A migration QR could not be read"));
+    }
+  }
+  return { payloads, warnings };
+}
+
+function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
+  const stitched = stitchMigrationBatches(payloadByteArrays);
+  const warnings = [...stitched.warnings];
+  if (stitched.entries.length === 0) {
+    throw new Error(`No importable entries found in the ${sourceLabel} export${warnings.length ? `: ${warnings.join(" ")}` : ""}`);
+  }
+
+  const candidates = [];
+  let skipped = 0;
+  let invalid = 0;
+  for (const params of stitched.entries) {
+    try {
+      const candidate = migrationToEntryCandidates([params])[0];
+      const entry = normalizeEntry(candidate);
+      if (hasDuplicateEntry(entries, entry) || candidates.some((existing) => existing.secret === entry.secret && existing.label === entry.label)) {
+        candidates.push({ ...entry, duplicateHint: true });
+        skipped += 1;
+        continue;
+      }
+      candidates.push(entry);
+    } catch (error) {
+      invalid += 1;
+      warnings.push(toUserMessage(error, "An entry could not be mapped"));
+    }
+  }
+
+  openMigrationPreview({ candidates, skipped, invalid, warnings, sourceLabel });
+}
+
+function openMigrationPreview(previewResult) {
+  migrationPreviewState = previewResult;
+  renderMigrationPreview();
+  migrationPreviewDialog?.showModal?.();
+}
+
+function renderMigrationPreview() {
+  if (!migrationPreviewState || !migrationPreviewList) return;
+  const { candidates, skipped, invalid, warnings, sourceLabel } = migrationPreviewState;
+
+  let statusText = `${sourceLabel}: ${candidates.length} entr${candidates.length === 1 ? "y" : "ies"} found.`;
+  if (skipped > 0) statusText += ` ${skipped} duplicate${skipped === 1 ? "" : "s"} pre-unchecked.`;
+  if (invalid > 0) statusText += ` ${invalid} could not be mapped.`;
+  if (warnings.length > 0) statusText += ` ${warnings.join(" ")}`;
+  migrationPreviewStatus.textContent = statusText;
+  migrationPreviewList.innerHTML = "";
+
+  candidates.forEach((entry, index) => {
+    const row = document.createElement("label");
+    row.className = "toggle-row";
+    row.dataset.index = String(index);
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "migration-include";
+    checkbox.checked = !entry.duplicateHint;
+
+    const summaryParts = [entry.label, `${entry.digits} digits`];
+    if (entry.type === "hotp") summaryParts.push(`HOTP #${entry.counter}`);
+    if (entry.algorithm && entry.algorithm !== "SHA1") summaryParts.push(entry.algorithm.replace(/^SHA/, "SHA-"));
+    const text = document.createElement("span");
+    text.textContent = entry.duplicateHint ? `${summaryParts.join(" • ")} (already in vault)` : summaryParts.join(" • ");
+
+    row.append(checkbox, text);
+    migrationPreviewList.appendChild(row);
+  });
+}
+
+async function commitMigrationPreview() {
+  if (!migrationPreviewState) return;
+  const rows = [...migrationPreviewList.querySelectorAll(".toggle-row")];
+  const nextOrder = nextOrderValueFrom(entries);
+  const selected = rows.flatMap((row, index) => {
+    const checkbox = row.querySelector(".migration-include");
+    if (!checkbox?.checked) return [];
+    const candidate = migrationPreviewState.candidates[index];
+    return [normalizeEntry({ ...candidate, order: nextOrder + index })];
+  });
+  if (selected.length === 0) throw new Error("Select at least one entry to import");
+  await replaceEntries([...entries, ...selected]);
+  migrationPreviewState = null;
 }
 
 function renderPassphraseStrength(input, meterRoot) {
@@ -770,6 +882,12 @@ function bindEvents() {
         throw new Error("Clipboard permission denied. Copy the URI into the secret field instead.");
       }
       const text = await navigator.clipboard.readText();
+      // Google Authenticator migration exports take priority over plain URIs.
+      const migration = collectMigrationPayloads(text);
+      if (migration.payloads.length > 0) {
+        stageMigrationPayloads(migration.payloads, "Clipboard");
+        return;
+      }
       const uri = extractOtpAuthUri(text);
       if (!uri) throw new Error("Clipboard does not contain a valid OTP URI");
       const entry = normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
@@ -780,6 +898,44 @@ function bindEvents() {
       reportError("Extension clipboard import failed", error);
       setMainStatus(toUserMessage(error, "Could not import URI"), "error");
     }
+  });
+
+  pasteGaBtn?.addEventListener("click", async () => {
+    try {
+      let hasClipboardRead = await chrome.permissions.contains({ permissions: ["clipboardRead"] });
+      if (!hasClipboardRead) {
+        hasClipboardRead = await chrome.permissions.request({ permissions: ["clipboardRead"] });
+      }
+      if (!hasClipboardRead) {
+        throw new Error("Clipboard permission denied. Copy the export URI and try again.");
+      }
+      const text = await navigator.clipboard.readText();
+      const migration = collectMigrationPayloads(text);
+      if (migration.payloads.length === 0) {
+        throw new Error(migration.warnings[0] || "Clipboard does not contain a Google Authenticator export");
+      }
+      stageMigrationPayloads(migration.payloads, "Google Authenticator");
+    } catch (error) {
+      reportError("Extension GA import failed", error);
+      setMainStatus(toUserMessage(error, "Could not import the Google Authenticator export"), "error");
+    }
+  });
+
+  migrationPreviewForm?.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "accept") return;
+    event.preventDefault();
+    try {
+      await commitMigrationPreview();
+      migrationPreviewDialog?.close("accept");
+      setMainStatus("Google Authenticator entries imported", "success");
+    } catch (error) {
+      reportError("Extension GA preview commit failed", error);
+      setMainStatus(toUserMessage(error, "Could not import entries"), "error");
+    }
+  });
+
+  migrationPreviewDialog?.addEventListener("close", () => {
+    migrationPreviewState = null;
   });
 
   searchInput.addEventListener("input", () => {

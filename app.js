@@ -2,9 +2,11 @@ import jsQR from "jsqr";
 import {
   compareEntries,
   entryMatchesQuery,
+  extractMigrationUris,
   extractOtpAuthUri,
   extractOtpAuthUris,
   formatCode,
+  generateHotp,
   generateTotp,
   getEntryGroup,
   getIssuerInitials,
@@ -18,6 +20,12 @@ import {
   reportError,
   toUserMessage,
 } from './lib/otp.js';
+import {
+  MAX_STITCHED_ENTRIES,
+  migrationToEntryCandidates,
+  parseMigrationUri,
+  stitchMigrationBatches,
+} from './lib/migration.js';
 import {
   assessPassphraseStrength,
   createEncryptedBackup,
@@ -48,6 +56,7 @@ var counterField = document.getElementById("counter-field");
 var algorithmSelect = document.getElementById("algorithm");
 var uriInput = document.getElementById("uri");
 var parseUriBtn = document.getElementById("parse-uri");
+var importGaBtn = document.getElementById("import-ga");
 var importClipboardBtn = document.getElementById("import-clipboard");
 var qrFileInput = document.getElementById("qr-file");
 var qrUrlInput = document.getElementById("qr-url");
@@ -1040,12 +1049,111 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
   return { candidates: unique, skipped, invalid, sourceLabel };
 }
 
+// --- Google Authenticator migration import (Phase 4) ---
+
+var migrationScanState = null;
+
+// Extracts migration URIs from raw text and decodes each into raw payload
+// bytes for stitching; parse failures become warnings, never aborts.
+function collectMigrationPayloads(rawText) {
+  const uris = extractMigrationUris(rawText);
+  if (uris.length === 0) return { payloads: [], warnings: [] };
+  const payloads = [];
+  const warnings = [];
+  for (const uri of uris) {
+    try {
+      payloads.push(parseMigrationUri(uri).payloadBytes);
+    } catch (error) {
+      warnings.push(toUserMessage(error, "A migration QR could not be read"));
+    }
+  }
+  return { payloads, warnings };
+}
+
+// Stitches decoded payloads, maps to vault candidates through normalizeEntry,
+// and opens the preview. Duplicates stay visible but pre-unchecked.
+function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
+  const stitched = stitchMigrationBatches(payloadByteArrays);
+  const warnings = [...stitched.warnings];
+  if (stitched.entries.length === 0) {
+    throw new Error(`No importable entries found in the ${sourceLabel} export${warnings.length ? `: ${warnings.join(" ")}` : ""}`);
+  }
+
+  const candidates = [];
+  let skipped = 0;
+  let invalid = 0;
+  for (const params of stitched.entries) {
+    try {
+      const candidate = migrationToEntryCandidates([params])[0];
+      const entry = normalizeEntry(candidate);
+      if (hasDuplicateEntry(entries, entry) || candidates.some((existing) => entryKey(existing) === entryKey(entry))) {
+        candidates.push({ ...entry, duplicateHint: true });
+        skipped += 1;
+        continue;
+      }
+      candidates.push(entry);
+    } catch (error) {
+      invalid += 1;
+      warnings.push(toUserMessage(error, "An entry could not be mapped"));
+    }
+  }
+
+  openImportPreview({ candidates, skipped, invalid, warnings, sourceLabel }, sourceLabel);
+}
+
+function finishMigrationCameraScan() {
+  const state = migrationScanState;
+  migrationScanState = null;
+  stopCameraScan();
+  if (!state || state.payloads.length === 0) return;
+  try {
+    stageMigrationPayloads(state.payloads, "Camera");
+  } catch (error) {
+    reportError("Camera migration import failed", error);
+    setImportStatus(toUserMessage(error, "Could not import the Google Authenticator scan"), "error");
+  }
+}
+
+// Camera loop handler for migration QRs: accumulate distinct batch payloads,
+// show progress, terminate on completion (all QRs of the batch scanned).
+function handleMigrationScanFrame(uri) {
+  try {
+    const parsed = parseMigrationUri(uri);
+    if (!migrationScanState) {
+      migrationScanState = { payloads: [], seenKeys: new Set(), total: null };
+    }
+    const payloadKey = `${parsed.batch.id}:${parsed.batch.index}`;
+    if (migrationScanState.seenKeys.has(payloadKey)) {
+      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+      return;
+    }
+    if (migrationScanState.total !== null && parsed.batch.size !== migrationScanState.total) {
+      setImportStatus("QR codes from different exports detected — restart the scan with one export.", "error");
+      migrationScanState = null;
+      return;
+    }
+    migrationScanState.total = parsed.batch.size;
+    migrationScanState.seenKeys.add(payloadKey);
+    migrationScanState.payloads.push(parsed.payloadBytes);
+    if (migrationScanState.seenKeys.size >= migrationScanState.total) {
+      setImportStatus("All QR codes scanned.", "success");
+      finishMigrationCameraScan();
+    } else {
+      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+    }
+  } catch (error) {
+    reportError("Migration scan failed", error);
+    setImportStatus(toUserMessage(error, "Could not read the Google Authenticator QR"), "error");
+  }
+}
+
 function renderImportPreview() {
   if (!importPreviewState || !importPreviewList) return;
 
   const candidates = importPreviewState.candidates || importPreviewState;
   const skipped = importPreviewState.skipped || 0;
   const invalid = importPreviewState.invalid || 0;
+  const warnings = importPreviewState.warnings || [];
   const sourceLabel = importPreviewState.sourceLabel || "Import";
 
   importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
@@ -1054,7 +1162,10 @@ function renderImportPreview() {
     statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
   }
   if (invalid > 0) {
-    statusText += ` Ignored ${invalid} invalid URI${invalid === 1 ? "" : "s"}.`;
+    statusText += ` Ignored ${invalid} invalid entr${invalid === 1 ? "y" : "ies"}.`;
+  }
+  if (warnings.length > 0) {
+    statusText += ` ${warnings.join(" ")}`;
   }
   importPreviewStatus.textContent = statusText;
   importPreviewList.innerHTML = "";
@@ -1069,9 +1180,9 @@ function renderImportPreview() {
     const includeInput = document.createElement("input");
     includeInput.type = "checkbox";
     includeInput.className = "preview-include";
-    includeInput.checked = true;
+    includeInput.checked = !entry.duplicateHint;
     const includeText = document.createElement("span");
-    includeText.textContent = "Import this entry";
+    includeText.textContent = entry.duplicateHint ? "Already in vault" : "Import this entry";
     includeLabel.append(includeInput, includeText);
 
     const labelField = document.createElement("label");
@@ -1166,6 +1277,15 @@ async function decodeQrFromBlob(blob) {
 }
 async function importFromQrBlob(blob, sourceLabel) {
   const qrText = await decodeQrFromBlob(blob);
+  // Google Authenticator migration QRs take priority over plain otpauth URIs.
+  const migration = collectMigrationPayloads(qrText);
+  if (migration.payloads.length > 0) {
+    stageMigrationPayloads(migration.payloads, sourceLabel);
+    return;
+  }
+  if (migration.warnings.length > 0) {
+    throw new Error(migration.warnings.join(" "));
+  }
   const uris = extractOtpAuthUris(qrText);
   if (uris.length === 0) throw new Error("QR code was detected but does not contain a valid OTP URI");
   const candidates = buildPreviewCandidatesFromUris(uris, sourceLabel);
@@ -1462,6 +1582,15 @@ async function startCameraScan() {
     ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+
+    // Migration QRs accumulate across frames (multi-QR batch export) instead
+    // of using the two-frame confirmation used for single otpauth URIs.
+    const migrationUris = extractMigrationUris(result?.data || "");
+    if (migrationUris.length > 0) {
+      handleMigrationScanFrame(migrationUris[0]);
+      return;
+    }
+
     const otpUri = extractOtpAuthUri(result?.data || "");
     if (!otpUri) {
       cameraDetection = { uri: "", hits: 0 };
@@ -1550,6 +1679,12 @@ function bindEvents() {
   });
   parseUriBtn.addEventListener("click", async () => {
     try {
+      const migration = collectMigrationPayloads(uriInput.value);
+      if (migration.payloads.length > 0) {
+        stageMigrationPayloads(migration.payloads, "URI");
+        uriInput.value = "";
+        return;
+      }
       const uris = extractOtpAuthUris(uriInput.value);
       if (uris.length === 0) throw new Error("No valid otpauth:// URI found");
       openImportPreview(buildPreviewCandidatesFromUris(uris, "URI"), "URI");
@@ -1557,6 +1692,24 @@ function bindEvents() {
     } catch (error) {
       reportError("URI import failed", error);
       setImportStatus(toUserMessage(error, "Invalid URI"), "error");
+    }
+  });
+  importGaBtn?.addEventListener("click", async () => {
+    try {
+      const source = uriInput.value.trim();
+      if (!source) {
+        throw new Error("Paste your Google Authenticator export (the otpauth-migration:// text or URI) first");
+      }
+      const migration = collectMigrationPayloads(source);
+      if (migration.payloads.length === 0) {
+        throw new Error(migration.warnings[0] || "No Google Authenticator export found in the pasted text");
+      }
+      setImportStatus("Decoding Google Authenticator export...");
+      stageMigrationPayloads(migration.payloads, "Google Authenticator");
+      uriInput.value = "";
+    } catch (error) {
+      reportError("GA import failed", error);
+      setImportStatus(toUserMessage(error, "Could not import the Google Authenticator export"), "error");
     }
   });
   qrFileInput.addEventListener("change", async () => {
@@ -1601,6 +1754,11 @@ function bindEvents() {
         }
       }
       const text = await navigator.clipboard.readText();
+      const migration = collectMigrationPayloads(text);
+      if (migration.payloads.length > 0) {
+        stageMigrationPayloads(migration.payloads, "Clipboard");
+        return;
+      }
       const uris = extractOtpAuthUris(text);
       if (uris.length === 0) throw new Error("Clipboard does not contain a valid OTP URI or QR image");
       openImportPreview(buildPreviewCandidatesFromUris(uris, "Clipboard"), "Clipboard");
@@ -1620,6 +1778,11 @@ function bindEvents() {
     }
   });
   stopCameraBtn.addEventListener("click", () => {
+    // Stopping mid-batch imports what was scanned so far (partial import).
+    if (migrationScanState?.payloads.length > 0) {
+      finishMigrationCameraScan();
+      return;
+    }
     stopCameraScan();
     setImportStatus("Camera stopped");
   });
