@@ -216,7 +216,7 @@ initialize();
 function applyStaticStrings() {
   const set = (id, key) => {
     const node = document.getElementById(id);
-    if (node && typeof t(key) === "string") node.textContent = t(key);
+    if (node) node.textContent = t(key);
   };
   const setPlaceholder = (id, key) => {
     const node = document.getElementById(id);
@@ -683,6 +683,11 @@ function renderBulkBar() {
   bulkSummary.textContent = `${selectedCount} selected`;
 }
 
+// Restores manual-order numbers only when a decrypt path produced entries
+// without them (mirrors extension/popup.js).
+function resequenceIfUnordered(decrypted) {
+  return decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+}
 function resequenceEntries(items) {
   return items.map((entry, index) => ({
     ...entry,
@@ -1803,7 +1808,7 @@ async function unlockVault(passphrase) {
     reconcileOrphanedBiometricRecord();
   }
   currentPassphrase = normalizedPassphrase;
-  entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+  entries = resequenceIfUnordered(decrypted);
   setLocked(false);
   renderEntries();
   await tick();
@@ -1839,7 +1844,7 @@ async function unlockWithBiometrics() {
     heldDek = dek;
     dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
     currentPassphrase = "";
-    entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+    entries = resequenceIfUnordered(decrypted);
     writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
     setLocked(false);
     renderEntries();
@@ -1900,10 +1905,10 @@ async function enrollVaultBiometrics() {
   };
   if (envelope) {
     localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(envelope));
+    dekEnvelopeMeta = extractDekEnvelopeMeta(envelope);
   }
   writeBiometricRecord(record);
   heldDek = dek;
-  dekEnvelopeMeta = extractDekEnvelopeMeta(JSON.parse(localStorage.getItem(ENCRYPTED_VAULT_KEY)));
   renderBiometricControls();
 }
 // FR5: disenroll — passphrase-verified, then re-encrypt data directly under

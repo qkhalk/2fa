@@ -10603,7 +10603,8 @@ function parseMigrationUri(uri) {
   } catch {
   }
   data = data.replace(/ /g, "+");
-  const payload = decodeMigrationPayload(b64DecodeBytes(data));
+  const payloadBytes = b64DecodeBytes(data);
+  const payload = decodeMigrationPayload(payloadBytes);
   const { entries: entries2, warnings } = filterMigrationEntries(payload.entries);
   return {
     entries: entries2,
@@ -10611,7 +10612,7 @@ function parseMigrationUri(uri) {
     batch: { size: payload.batchSize, index: payload.batchIndex, id: payload.batchId },
     // Raw decoded payload bytes so multi-QR camera flows can accumulate and
     // stitch via stitchMigrationBatches without re-parsing the URI.
-    payloadBytes: b64DecodeBytes(data)
+    payloadBytes
   };
 }
 function entryDisplayName(params) {
@@ -10839,20 +10840,23 @@ async function deriveVaultKey(passphrase, salt, params = KDF_PARAMS_DEFAULT, cry
     ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
   );
 }
+async function decryptAndNormalize(key, normalizedPayload, safeCrypto) {
+  const decrypted = await safeCrypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
+    key,
+    fromBase64(normalizedPayload.data)
+  );
+  const parsed = JSON.parse(decoder.decode(decrypted));
+  return normalizeBackupEntriesStrict(parsed, {
+    message: "Decrypted vault entries are invalid",
+    code: "VAULT_ENTRIES_INVALID"
+  });
+}
 async function decryptVaultEntriesWithKey(key, payload, cryptoApi = globalThis.crypto) {
   const safeCrypto = requireCrypto(cryptoApi);
   const normalizedPayload = validateEncryptedPayload(payload);
   try {
-    const decrypted = await safeCrypto.subtle.decrypt(
-      { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
-      key,
-      fromBase64(normalizedPayload.data)
-    );
-    const parsed = JSON.parse(decoder.decode(decrypted));
-    return normalizeBackupEntriesStrict(parsed, {
-      message: "Decrypted vault entries are invalid",
-      code: "VAULT_ENTRIES_INVALID"
-    });
+    return await decryptAndNormalize(key, normalizedPayload, safeCrypto);
   } catch (error) {
     if (error instanceof OtpVaultError) throw error;
     throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {
@@ -11061,16 +11065,7 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
   try {
     if (isDekEncryptedPayload(normalizedPayload)) {
       const dek = await unwrapDekWithPassphrase(normalizedPayload, normalizedPassphrase, safeCrypto);
-      const decrypted2 = await safeCrypto.subtle.decrypt(
-        { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
-        dek,
-        fromBase64(normalizedPayload.data)
-      );
-      const parsed2 = JSON.parse(decoder.decode(decrypted2));
-      return normalizeBackupEntriesStrict(parsed2, {
-        message: "Decrypted vault entries are invalid",
-        code: "VAULT_ENTRIES_INVALID"
-      });
+      return await decryptAndNormalize(dek, normalizedPayload, safeCrypto);
     }
     const key = await deriveVaultKey(
       normalizedPassphrase,
@@ -11078,16 +11073,7 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
       resolveKdfParams(normalizedPayload.kdf),
       safeCrypto
     );
-    const decrypted = await safeCrypto.subtle.decrypt(
-      { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
-      key,
-      fromBase64(normalizedPayload.data)
-    );
-    const parsed = JSON.parse(decoder.decode(decrypted));
-    return normalizeBackupEntriesStrict(parsed, {
-      message: "Decrypted vault entries are invalid",
-      code: "VAULT_ENTRIES_INVALID"
-    });
+    return await decryptAndNormalize(key, normalizedPayload, safeCrypto);
   } catch (error) {
     if (error instanceof OtpVaultError) throw error;
     throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {
@@ -11754,7 +11740,7 @@ initialize();
 function applyStaticStrings() {
   const set = (id, key) => {
     const node = document.getElementById(id);
-    if (node && typeof t(key) === "string") node.textContent = t(key);
+    if (node) node.textContent = t(key);
   };
   const setPlaceholder = (id, key) => {
     const node = document.getElementById(id);
@@ -12196,6 +12182,9 @@ function renderBulkBar() {
   const selectedCount = selectedEntryIds.size;
   bulkBar.classList.toggle("hidden", selectedCount === 0);
   bulkSummary.textContent = `${selectedCount} selected`;
+}
+function resequenceIfUnordered(decrypted) {
+  return decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
 }
 function resequenceEntries(items) {
   return items.map((entry, index) => ({
@@ -13201,7 +13190,7 @@ async function unlockVault(passphrase) {
     reconcileOrphanedBiometricRecord();
   }
   currentPassphrase = normalizedPassphrase;
-  entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+  entries = resequenceIfUnordered(decrypted);
   setLocked(false);
   renderEntries();
   await tick();
@@ -13235,7 +13224,7 @@ async function unlockWithBiometrics() {
     heldDek = dek;
     dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
     currentPassphrase = "";
-    entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+    entries = resequenceIfUnordered(decrypted);
     writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
     setLocked(false);
     renderEntries();
@@ -13289,10 +13278,10 @@ async function enrollVaultBiometrics() {
   };
   if (envelope) {
     localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(envelope));
+    dekEnvelopeMeta = extractDekEnvelopeMeta(envelope);
   }
   writeBiometricRecord(record);
   heldDek = dek;
-  dekEnvelopeMeta = extractDekEnvelopeMeta(JSON.parse(localStorage.getItem(ENCRYPTED_VAULT_KEY)));
   renderBiometricControls();
 }
 async function disenrollVaultBiometrics() {
