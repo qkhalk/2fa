@@ -30,7 +30,8 @@ import {
 } from './lib/vault.js';
 
 // app.js
-var STORAGE_KEY = "personal_otp_vault_entries_v2";
+var STORAGE_KEY = "personal_otp_vault_entries_v3";
+var LEGACY_STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
 var ENCRYPTED_VAULT_KEY = "personal_otp_vault_encrypted_v1";
@@ -41,6 +42,10 @@ var secretInput = document.getElementById("secret");
 var tagsInput = document.getElementById("tags");
 var digitsInput = document.getElementById("digits");
 var periodInput = document.getElementById("period");
+var entryTypeSelect = document.getElementById("entry-type");
+var counterInput = document.getElementById("counter");
+var counterField = document.getElementById("counter-field");
+var algorithmSelect = document.getElementById("algorithm");
 var uriInput = document.getElementById("uri");
 var parseUriBtn = document.getElementById("parse-uri");
 var importClipboardBtn = document.getElementById("import-clipboard");
@@ -118,6 +123,9 @@ var editSecretInput = document.getElementById("edit-secret");
 var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
+var editCounterField = document.getElementById("edit-counter-field");
+var editCounterInput = document.getElementById("edit-counter");
+var editAlgorithmSelect = document.getElementById("edit-algorithm");
 var editEntryStatus = document.getElementById("edit-entry-status");
 var changePassphraseDialog = document.getElementById("change-passphrase-dialog");
 var changePassphraseForm = document.getElementById("change-passphrase-form");
@@ -403,7 +411,7 @@ function unlockBackoffSeconds(attempts) {
 }
 function bindMultiTabGuard() {
   window.addEventListener("storage", (event) => {
-    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY) return;
+    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
     if (event.newValue === event.oldValue) return;
     markVaultStale();
   });
@@ -411,11 +419,20 @@ function bindMultiTabGuard() {
   banner?.querySelector("#vault-stale-reload")?.addEventListener("click", () => window.location.reload());
   banner?.querySelector("#vault-stale-dismiss")?.addEventListener("click", () => banner.classList.add("hidden"));
 }
+// Reads the v3 plaintext store, falling back to the legacy v2 key only while
+// v3 is absent (first load after the upgrade). v2 is never deleted — stale
+// tabs and older bundles may still read/write it — but once v3 exists it is
+// authoritative, so v2 data cannot resurrect entries deleted after migration.
+function readPlainEntriesRaw() {
+  const v3Raw = localStorage.getItem(STORAGE_KEY);
+  if (v3Raw) return normalizeEntries(JSON.parse(v3Raw));
+  const v2Raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (v2Raw) return normalizeEntries(JSON.parse(v2Raw));
+  return [];
+}
 function loadPlainEntries() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = normalizeEntries(JSON.parse(raw));
+    const parsed = readPlainEntriesRaw();
     return parsed.every((entry) => !entry.order) ? resequenceEntries(parsed) : parsed;
   } catch (error) {
     reportError("Failed to load plain entries", error);
@@ -428,6 +445,7 @@ function savePlainEntries() {
 function snapshotPersistedVaultArtifacts() {
   return {
     plainEntries: localStorage.getItem(STORAGE_KEY),
+    legacyPlainEntries: localStorage.getItem(LEGACY_STORAGE_KEY),
     encryptedEntries: localStorage.getItem(ENCRYPTED_VAULT_KEY)
   };
 }
@@ -437,6 +455,11 @@ function restorePersistedVaultArtifacts(snapshot) {
   } else {
     localStorage.setItem(STORAGE_KEY, snapshot.plainEntries);
   }
+  if (snapshot.legacyPlainEntries === null) {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } else {
+    localStorage.setItem(LEGACY_STORAGE_KEY, snapshot.legacyPlainEntries);
+  }
   if (snapshot.encryptedEntries === null) {
     localStorage.removeItem(ENCRYPTED_VAULT_KEY);
   } else {
@@ -445,6 +468,7 @@ function restorePersistedVaultArtifacts(snapshot) {
 }
 function clearPersistedEntries() {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
   localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 function entryKey(entry) {
@@ -535,6 +559,23 @@ function resequenceEntries(items) {
   }));
 }
 
+// HOTP counter-increment-on-use: persists counter+1 through the encrypted
+// vault path. A failed persist leaves the stored counter behind the code the
+// user already consumed — surface it instead of silently regressing (FR9).
+async function consumeHotpCounter(entry, action) {
+  if (entry.type !== "hotp") return;
+  try {
+    await replaceEntries(entries.map((item) => item.id === entry.id ? { ...item, counter: item.counter + 1 } : item));
+  } catch (error) {
+    reportError(`HOTP counter persist failed (${action})`, error);
+    showToast(
+      "HOTP counter",
+      "Counter save failed — the next code may repeat. Use Edit on this entry to set the counter manually.",
+      "error"
+    );
+  }
+}
+
 function openEditEntryDialog(entry) {
   if (!editEntryDialog) return;
   editEntryIdInput.value = entry.id;
@@ -543,6 +584,9 @@ function openEditEntryDialog(entry) {
   editTagsInput.value = (entry.tags || []).join(", ");
   editDigitsInput.value = String(entry.digits);
   editPeriodInput.value = String(entry.period);
+  editAlgorithmSelect.value = entry.algorithm || "SHA1";
+  editCounterField?.classList.toggle("hidden", entry.type !== "hotp");
+  if (editCounterInput) editCounterInput.value = String(entry.type === "hotp" ? entry.counter : 0);
   setStatus(editEntryStatus, "");
   editEntryDialog.showModal();
 }
@@ -558,6 +602,8 @@ async function saveEditedEntry() {
     tags: normalizeTags(editTagsInput.value),
     digits: Number(editDigitsInput.value),
     period: Number(editPeriodInput.value),
+    algorithm: editAlgorithmSelect.value,
+    counter: current.type === "hotp" && editCounterInput ? Number(editCounterInput.value) : current.counter,
     order: current.order
   });
   if (entries.some((entry) => entry.id !== id && entryKey(entry) === entryKey(updated))) {
@@ -665,6 +711,7 @@ function createEntryNode(entry) {
       setTimeout(() => {
         copyBtn.textContent = "Copy";
       }, 1e3);
+      await consumeHotpCounter(entry, "copy");
     } catch (error) {
       reportError("Copy failed", error);
       showToast("Vault", toUserMessage(error, "Could not copy OTP to clipboard"), "error");
@@ -700,9 +747,14 @@ function createEntryNode(entry) {
       setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
     }
   };
-  revealBtn.onclick = () => {
+  revealBtn.onclick = async () => {
     node.classList.toggle("revealed");
-    revealBtn.textContent = node.classList.contains("revealed") ? "Hide" : "Reveal";
+    const revealed = node.classList.contains("revealed");
+    revealBtn.textContent = revealed ? "Hide" : "Reveal";
+    // Revealing an HOTP code consumes it: advance the persisted counter.
+    if (revealed && entry.type === "hotp") {
+      await consumeHotpCounter(entry, "reveal");
+    }
   };
   pinBtn.onclick = async () => {
     try {
@@ -744,6 +796,18 @@ function refreshEntryMetadata(node, entry) {
   node.querySelector(".entry-label").textContent = parts.issuer;
   node.querySelector(".entry-account").textContent = parts.account;
   node.querySelector(".entry-meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+  const algoBadge = node.querySelector(".entry-algo");
+  if (algoBadge) {
+    const showAlgo = entry.algorithm && entry.algorithm !== "SHA1";
+    algoBadge.textContent = showAlgo ? entry.algorithm.replace(/^SHA/, "SHA-") : "";
+    algoBadge.classList.toggle("hidden", !showAlgo);
+  }
+  const counterBadge = node.querySelector(".entry-counter");
+  if (counterBadge) {
+    const isHotp = entry.type === "hotp";
+    counterBadge.textContent = isHotp ? `#${entry.counter}` : "";
+    counterBadge.classList.toggle("hidden", !isHotp);
+  }
   renderTagRow(node, entry);
 }
 function renderEntries() {
@@ -807,12 +871,22 @@ async function updateEntryNode(entry, now) {
   const seconds = node.querySelector(".entry-seconds");
   const bar = node.querySelector(".entry-bar");
   const copyBtn = node.querySelector(".copy");
-  const remaining = entry.period - now % entry.period;
-  seconds.textContent = `${remaining}s left`;
-  bar.style.transform = `scaleX(${remaining / entry.period})`;
-  node.classList.toggle("urgent", remaining <= 10);
   try {
-    const otp = await generateTotp(entry.secret, entry.digits, entry.period, now);
+    let otp;
+    if (entry.type === "hotp") {
+      // HOTP renders the deterministic code for the persisted counter —
+      // no rolling timer; the counter advances only on reveal/copy (FR8).
+      seconds.textContent = `counter #${entry.counter}`;
+      bar.style.transform = "scaleX(1)";
+      node.classList.toggle("urgent", false);
+      otp = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
+    } else {
+      const remaining = entry.period - now % entry.period;
+      seconds.textContent = `${remaining}s left`;
+      bar.style.transform = `scaleX(${remaining / entry.period})`;
+      node.classList.toggle("urgent", remaining <= 10);
+      otp = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
+    }
     code.textContent = formatCode(otp);
     node.dataset.otp = otp;
     copyBtn.disabled = false;
@@ -892,6 +966,7 @@ async function persistEntries() {
       }
       await saveEncryptedEntries(entries, currentPassphrase);
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
       return;
     }
     savePlainEntries();
@@ -1019,7 +1094,10 @@ function renderImportPreview() {
     tagsField.append(tagsText, tagsInput);
 
     const summary = document.createElement("p");
-    summary.textContent = `${entry.digits} digits • ${entry.period}s`;
+    const summaryParts = [`${entry.digits} digits`, `${entry.period}s`];
+    if (entry.type === "hotp") summaryParts.push(`HOTP #${entry.counter}`);
+    if (entry.algorithm && entry.algorithm !== "SHA1") summaryParts.push(entry.algorithm.replace(/^SHA/, "SHA-"));
+    summary.textContent = summaryParts.join(" • ");
 
     row.append(includeLabel, labelField, tagsField, summary);
     importPreviewList.appendChild(row);
@@ -1443,12 +1521,18 @@ function bindEvents() {
   encryptToggle.addEventListener("change", () => {
     encryptionFields.classList.toggle("hidden", !encryptToggle.checked);
   });
+  entryTypeSelect?.addEventListener("change", () => {
+    counterField?.classList.toggle("hidden", entryTypeSelect.value !== "hotp");
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await addEntry({
         label: labelInput.value,
         secret: secretInput.value,
+        type: entryTypeSelect?.value || "totp",
+        counter: entryTypeSelect?.value === "hotp" ? Number(counterInput?.value || 0) : 0,
+        algorithm: algorithmSelect?.value || "SHA1",
         digits: Number(digitsInput.value),
         period: Number(periodInput.value),
         tags: normalizeTags(tagsInput?.value)
@@ -1456,6 +1540,7 @@ function bindEvents() {
       form.reset();
       digitsInput.value = "6";
       periodInput.value = "30";
+      counterField?.classList.add("hidden");
       syncSettingsUI();
       setImportStatus("Entry added", "success");
     } catch (error) {

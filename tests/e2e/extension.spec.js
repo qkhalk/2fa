@@ -237,7 +237,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
       };
       chrome.storage.local.remove = async (keys) => {
         const keyList = Array.isArray(keys) ? keys : [keys];
-        if (keyList.includes("otp_extension_entries_v2") && encryptedWriteCount > 0) {
+        if (keyList.includes("otp_extension_entries_v3") && encryptedWriteCount > 0) {
           throw new Error("Simulated extension artifact cleanup failure");
         }
         return originalRemove(keys);
@@ -254,7 +254,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
     await expect(page.locator(".entry-card")).toHaveCount(1);
 
     const plainEntries = await page.evaluate(() =>
-      new Promise((resolve) => chrome.storage.local.get("otp_extension_entries_v2", (r) => resolve(r.otp_extension_entries_v2)))
+      new Promise((resolve) => chrome.storage.local.get("otp_extension_entries_v3", (r) => resolve(r.otp_extension_entries_v3)))
     );
     expect(plainEntries).not.toBeNull();
     expect(plainEntries).toHaveLength(1);

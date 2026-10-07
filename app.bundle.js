@@ -10051,6 +10051,10 @@ var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
 var MAX_PERIOD = 120;
+var OTP_TYPES = ["totp", "hotp"];
+var OTP_ALGORITHMS = ["SHA1", "SHA256", "SHA512"];
+var HMAC_HASH_NAMES = { SHA1: "SHA-1", SHA256: "SHA-256", SHA512: "SHA-512" };
+var MAX_SAFE_COUNTER = Number.MAX_SAFE_INTEGER;
 var OtpVaultError = class extends Error {
   constructor(message, { code = "OTP_VAULT_ERROR", cause } = {}) {
     super(message, cause ? { cause } : void 0);
@@ -10115,6 +10119,28 @@ function ensurePeriod(period) {
   }
   return value;
 }
+function ensureType(type) {
+  const value = String(type || "totp").toLowerCase();
+  if (!OTP_TYPES.includes(value)) {
+    throw new OtpVaultError("OTP type must be totp or hotp", { code: "OTP_TYPE_INVALID" });
+  }
+  return value;
+}
+function ensureAlgorithm(algorithm) {
+  const value = String(algorithm || "SHA1").toUpperCase();
+  if (!OTP_ALGORITHMS.includes(value)) {
+    throw new OtpVaultError("OTP algorithm must be SHA1, SHA256, or SHA512", { code: "ALGORITHM_UNSUPPORTED" });
+  }
+  return value;
+}
+function ensureCounter(counter) {
+  if (counter === void 0 || counter === null || counter === "") return 0;
+  const value = Number(counter);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SAFE_COUNTER) {
+    throw new OtpVaultError("HOTP counter must be a non-negative integer", { code: "COUNTER_INVALID" });
+  }
+  return value;
+}
 function createFallbackLabel(secret) {
   const clean = sanitizeBase32(secret);
   if (clean.length <= 8) return `Secret ${clean || "entry"}`;
@@ -10130,10 +10156,14 @@ function normalizeLabel(label, secret) {
 }
 function normalizeEntry(entry) {
   const secret = ensureBase32Secret(entry.secret || "");
+  const type = ensureType(entry.type);
   return {
     id: entry.id || generateEntryId(),
     label: normalizeLabel(entry.label, secret),
     secret,
+    type,
+    counter: type === "hotp" ? ensureCounter(entry.counter) : 0,
+    algorithm: ensureAlgorithm(entry.algorithm),
     digits: ensureDigits(entry.digits ?? 6),
     period: ensurePeriod(entry.period ?? 30),
     pinned: Boolean(entry.pinned),
@@ -10191,12 +10221,21 @@ function parseOtpAuthUri(uri) {
   if (parsed.protocol !== "otpauth:") {
     throw new OtpVaultError("URI must start with otpauth://", { code: "URI_PROTOCOL" });
   }
-  if (parsed.hostname.toLowerCase() !== "totp") {
-    throw new OtpVaultError("Only TOTP URIs are supported", { code: "URI_TYPE" });
+  const type = parsed.hostname.toLowerCase();
+  if (type !== "totp" && type !== "hotp") {
+    throw new OtpVaultError("Only TOTP and HOTP URIs are supported", { code: "URI_TYPE" });
   }
   const algorithm = (parsed.searchParams.get("algorithm") || "SHA1").toUpperCase();
-  if (algorithm !== "SHA1") {
-    throw new OtpVaultError("Only SHA1 TOTP URIs are supported", { code: "URI_ALGORITHM" });
+  if (!OTP_ALGORITHMS.includes(algorithm)) {
+    throw new OtpVaultError("Only SHA1, SHA256, and SHA512 OTP URIs are supported", { code: "URI_ALGORITHM" });
+  }
+  let counter;
+  if (type === "hotp") {
+    const counterParam = parsed.searchParams.get("counter");
+    counter = counterParam === null ? 0 : Number(counterParam);
+    if (!Number.isInteger(counter) || counter < 0 || counter > MAX_SAFE_COUNTER) {
+      throw new OtpVaultError("HOTP counter must be a non-negative integer", { code: "URI_COUNTER" });
+    }
   }
   const issuerParam = safeDecode(parsed.searchParams.get("issuer") || "").trim();
   const rawLabel = safeDecode(parsed.pathname.replace(/^\/+/, "")).trim();
@@ -10210,8 +10249,12 @@ function parseOtpAuthUri(uri) {
   return normalizeEntry({
     label,
     secret: parsed.searchParams.get("secret") || "",
+    type,
+    counter,
+    algorithm,
+    // Period is meaningless for HOTP but stored so the entry shape stays valid.
     digits: parsed.searchParams.has("digits") ? Number(parsed.searchParams.get("digits")) : 6,
-    period: parsed.searchParams.has("period") ? Number(parsed.searchParams.get("period")) : 30
+    period: type === "hotp" ? 30 : parsed.searchParams.has("period") ? Number(parsed.searchParams.get("period")) : 30
   });
 }
 function extractOtpAuthUri(rawText) {
@@ -10288,23 +10331,33 @@ function toCounterBytes(counter) {
   }
   return bytes;
 }
-async function hmacSha1(keyBytes, messageBytes, cryptoApi = globalThis.crypto) {
+async function hmac(keyBytes, messageBytes, hash, cryptoApi = globalThis.crypto) {
   if (!cryptoApi?.subtle) {
     throw new OtpVaultError("Browser crypto support is unavailable", { code: "CRYPTO_UNAVAILABLE" });
   }
-  const key = await cryptoApi.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const algorithmName = HMAC_HASH_NAMES[hash] || hash;
+  const key = await cryptoApi.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: algorithmName }, false, ["sign"]);
   const signature = await cryptoApi.subtle.sign("HMAC", key, messageBytes);
   return new Uint8Array(signature);
 }
-async function generateTotp(secret, digits, period, now, cryptoApi = globalThis.crypto) {
+function truncateDigest(digest, digits) {
+  const offset = digest[digest.length - 1] & 15;
+  const binary = (digest[offset] & 127) << 24 | digest[offset + 1] << 16 | digest[offset + 2] << 8 | digest[offset + 3];
+  return (binary % 10 ** digits).toString().padStart(digits, "0");
+}
+async function generateTotp(secret, digits, period, now, algorithm = "SHA1", cryptoApi = globalThis.crypto) {
   const normalizedSecret = ensureBase32Secret(secret);
   const normalizedDigits = ensureDigits(digits);
   const normalizedPeriod = ensurePeriod(period);
+  const normalizedAlgorithm = ensureAlgorithm(algorithm);
   const counter = Math.floor(now / normalizedPeriod);
-  const digest = await hmacSha1(base32ToBytes(normalizedSecret), toCounterBytes(counter), cryptoApi);
-  const offset = digest[digest.length - 1] & 15;
-  const binary = (digest[offset] & 127) << 24 | digest[offset + 1] << 16 | digest[offset + 2] << 8 | digest[offset + 3];
-  return (binary % 10 ** normalizedDigits).toString().padStart(normalizedDigits, "0");
+  const digest = await hmac(
+    base32ToBytes(normalizedSecret),
+    toCounterBytes(counter),
+    normalizedAlgorithm,
+    cryptoApi
+  );
+  return truncateDigest(digest, normalizedDigits);
 }
 function formatCode(code) {
   if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -10649,7 +10702,8 @@ async function parseBackupFile(rawBackup, cryptoApi = globalThis.crypto) {
 }
 
 // app.js
-var STORAGE_KEY = "personal_otp_vault_entries_v2";
+var STORAGE_KEY = "personal_otp_vault_entries_v3";
+var LEGACY_STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
 var ENCRYPTED_VAULT_KEY = "personal_otp_vault_encrypted_v1";
@@ -10660,6 +10714,10 @@ var secretInput = document.getElementById("secret");
 var tagsInput = document.getElementById("tags");
 var digitsInput = document.getElementById("digits");
 var periodInput = document.getElementById("period");
+var entryTypeSelect = document.getElementById("entry-type");
+var counterInput = document.getElementById("counter");
+var counterField = document.getElementById("counter-field");
+var algorithmSelect = document.getElementById("algorithm");
 var uriInput = document.getElementById("uri");
 var parseUriBtn = document.getElementById("parse-uri");
 var importClipboardBtn = document.getElementById("import-clipboard");
@@ -10737,6 +10795,9 @@ var editSecretInput = document.getElementById("edit-secret");
 var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
+var editCounterField = document.getElementById("edit-counter-field");
+var editCounterInput = document.getElementById("edit-counter");
+var editAlgorithmSelect = document.getElementById("edit-algorithm");
 var editEntryStatus = document.getElementById("edit-entry-status");
 var changePassphraseDialog = document.getElementById("change-passphrase-dialog");
 var changePassphraseForm = document.getElementById("change-passphrase-form");
@@ -11014,7 +11075,7 @@ function unlockBackoffSeconds(attempts) {
 }
 function bindMultiTabGuard() {
   window.addEventListener("storage", (event) => {
-    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY) return;
+    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY && event.key !== LEGACY_STORAGE_KEY) return;
     if (event.newValue === event.oldValue) return;
     markVaultStale();
   });
@@ -11022,11 +11083,16 @@ function bindMultiTabGuard() {
   banner?.querySelector("#vault-stale-reload")?.addEventListener("click", () => window.location.reload());
   banner?.querySelector("#vault-stale-dismiss")?.addEventListener("click", () => banner.classList.add("hidden"));
 }
+function readPlainEntriesRaw() {
+  const v3Raw = localStorage.getItem(STORAGE_KEY);
+  if (v3Raw) return normalizeEntries(JSON.parse(v3Raw));
+  const v2Raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (v2Raw) return normalizeEntries(JSON.parse(v2Raw));
+  return [];
+}
 function loadPlainEntries() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = normalizeEntries(JSON.parse(raw));
+    const parsed = readPlainEntriesRaw();
     return parsed.every((entry) => !entry.order) ? resequenceEntries(parsed) : parsed;
   } catch (error) {
     reportError("Failed to load plain entries", error);
@@ -11039,6 +11105,7 @@ function savePlainEntries() {
 function snapshotPersistedVaultArtifacts() {
   return {
     plainEntries: localStorage.getItem(STORAGE_KEY),
+    legacyPlainEntries: localStorage.getItem(LEGACY_STORAGE_KEY),
     encryptedEntries: localStorage.getItem(ENCRYPTED_VAULT_KEY)
   };
 }
@@ -11048,6 +11115,11 @@ function restorePersistedVaultArtifacts(snapshot) {
   } else {
     localStorage.setItem(STORAGE_KEY, snapshot.plainEntries);
   }
+  if (snapshot.legacyPlainEntries === null) {
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } else {
+    localStorage.setItem(LEGACY_STORAGE_KEY, snapshot.legacyPlainEntries);
+  }
   if (snapshot.encryptedEntries === null) {
     localStorage.removeItem(ENCRYPTED_VAULT_KEY);
   } else {
@@ -11056,6 +11128,7 @@ function restorePersistedVaultArtifacts(snapshot) {
 }
 function clearPersistedEntries() {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
   localStorage.removeItem(ENCRYPTED_VAULT_KEY);
 }
 function entryKey(entry) {
@@ -11144,6 +11217,19 @@ function resequenceEntries(items) {
     order: index + 1
   }));
 }
+async function consumeHotpCounter(entry, action) {
+  if (entry.type !== "hotp") return;
+  try {
+    await replaceEntries(entries.map((item) => item.id === entry.id ? { ...item, counter: item.counter + 1 } : item));
+  } catch (error) {
+    reportError(`HOTP counter persist failed (${action})`, error);
+    showToast(
+      "HOTP counter",
+      "Counter save failed \u2014 the next code may repeat. Use Edit on this entry to set the counter manually.",
+      "error"
+    );
+  }
+}
 function openEditEntryDialog(entry) {
   if (!editEntryDialog) return;
   editEntryIdInput.value = entry.id;
@@ -11152,6 +11238,9 @@ function openEditEntryDialog(entry) {
   editTagsInput.value = (entry.tags || []).join(", ");
   editDigitsInput.value = String(entry.digits);
   editPeriodInput.value = String(entry.period);
+  editAlgorithmSelect.value = entry.algorithm || "SHA1";
+  editCounterField?.classList.toggle("hidden", entry.type !== "hotp");
+  if (editCounterInput) editCounterInput.value = String(entry.type === "hotp" ? entry.counter : 0);
   setStatus(editEntryStatus, "");
   editEntryDialog.showModal();
 }
@@ -11166,6 +11255,8 @@ async function saveEditedEntry() {
     tags: normalizeTags(editTagsInput.value),
     digits: Number(editDigitsInput.value),
     period: Number(editPeriodInput.value),
+    algorithm: editAlgorithmSelect.value,
+    counter: current.type === "hotp" && editCounterInput ? Number(editCounterInput.value) : current.counter,
     order: current.order
   });
   if (entries.some((entry) => entry.id !== id && entryKey(entry) === entryKey(updated))) {
@@ -11271,6 +11362,7 @@ function createEntryNode(entry) {
       setTimeout(() => {
         copyBtn.textContent = "Copy";
       }, 1e3);
+      await consumeHotpCounter(entry, "copy");
     } catch (error) {
       reportError("Copy failed", error);
       showToast("Vault", toUserMessage(error, "Could not copy OTP to clipboard"), "error");
@@ -11303,9 +11395,13 @@ function createEntryNode(entry) {
       setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
     }
   };
-  revealBtn.onclick = () => {
+  revealBtn.onclick = async () => {
     node.classList.toggle("revealed");
-    revealBtn.textContent = node.classList.contains("revealed") ? "Hide" : "Reveal";
+    const revealed = node.classList.contains("revealed");
+    revealBtn.textContent = revealed ? "Hide" : "Reveal";
+    if (revealed && entry.type === "hotp") {
+      await consumeHotpCounter(entry, "reveal");
+    }
   };
   pinBtn.onclick = async () => {
     try {
@@ -11347,6 +11443,18 @@ function refreshEntryMetadata(node, entry) {
   node.querySelector(".entry-label").textContent = parts.issuer;
   node.querySelector(".entry-account").textContent = parts.account;
   node.querySelector(".entry-meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+  const algoBadge = node.querySelector(".entry-algo");
+  if (algoBadge) {
+    const showAlgo = entry.algorithm && entry.algorithm !== "SHA1";
+    algoBadge.textContent = showAlgo ? entry.algorithm.replace(/^SHA/, "SHA-") : "";
+    algoBadge.classList.toggle("hidden", !showAlgo);
+  }
+  const counterBadge = node.querySelector(".entry-counter");
+  if (counterBadge) {
+    const isHotp = entry.type === "hotp";
+    counterBadge.textContent = isHotp ? `#${entry.counter}` : "";
+    counterBadge.classList.toggle("hidden", !isHotp);
+  }
   renderTagRow(node, entry);
 }
 function renderEntries() {
@@ -11410,12 +11518,20 @@ async function updateEntryNode(entry, now) {
   const seconds = node.querySelector(".entry-seconds");
   const bar = node.querySelector(".entry-bar");
   const copyBtn = node.querySelector(".copy");
-  const remaining = entry.period - now % entry.period;
-  seconds.textContent = `${remaining}s left`;
-  bar.style.transform = `scaleX(${remaining / entry.period})`;
-  node.classList.toggle("urgent", remaining <= 10);
   try {
-    const otp = await generateTotp(entry.secret, entry.digits, entry.period, now);
+    let otp;
+    if (entry.type === "hotp") {
+      seconds.textContent = `counter #${entry.counter}`;
+      bar.style.transform = "scaleX(1)";
+      node.classList.toggle("urgent", false);
+      otp = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
+    } else {
+      const remaining = entry.period - now % entry.period;
+      seconds.textContent = `${remaining}s left`;
+      bar.style.transform = `scaleX(${remaining / entry.period})`;
+      node.classList.toggle("urgent", remaining <= 10);
+      otp = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
+    }
     code.textContent = formatCode(otp);
     node.dataset.otp = otp;
     copyBtn.disabled = false;
@@ -11488,6 +11604,7 @@ async function persistEntries() {
       }
       await saveEncryptedEntries(entries, currentPassphrase);
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
       return;
     }
     savePlainEntries();
@@ -11604,7 +11721,10 @@ function renderImportPreview() {
     tagsInput2.placeholder = "project, hardware-key";
     tagsField.append(tagsText, tagsInput2);
     const summary = document.createElement("p");
-    summary.textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+    const summaryParts = [`${entry.digits} digits`, `${entry.period}s`];
+    if (entry.type === "hotp") summaryParts.push(`HOTP #${entry.counter}`);
+    if (entry.algorithm && entry.algorithm !== "SHA1") summaryParts.push(entry.algorithm.replace(/^SHA/, "SHA-"));
+    summary.textContent = summaryParts.join(" \u2022 ");
     row.append(includeLabel, labelField, tagsField, summary);
     importPreviewList.appendChild(row);
   });
@@ -12009,12 +12129,18 @@ function bindEvents() {
   encryptToggle.addEventListener("change", () => {
     encryptionFields.classList.toggle("hidden", !encryptToggle.checked);
   });
+  entryTypeSelect?.addEventListener("change", () => {
+    counterField?.classList.toggle("hidden", entryTypeSelect.value !== "hotp");
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       await addEntry({
         label: labelInput.value,
         secret: secretInput.value,
+        type: entryTypeSelect?.value || "totp",
+        counter: entryTypeSelect?.value === "hotp" ? Number(counterInput?.value || 0) : 0,
+        algorithm: algorithmSelect?.value || "SHA1",
         digits: Number(digitsInput.value),
         period: Number(periodInput.value),
         tags: normalizeTags(tagsInput?.value)
@@ -12022,6 +12148,7 @@ function bindEvents() {
       form.reset();
       digitsInput.value = "6";
       periodInput.value = "30";
+      counterField?.classList.add("hidden");
       syncSettingsUI();
       setImportStatus("Entry added", "success");
     } catch (error) {

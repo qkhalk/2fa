@@ -22,7 +22,8 @@ import {
   normalizePassphrase,
 } from "../lib/vault.js";
 
-const STORAGE_KEY = "otp_extension_entries_v2";
+const STORAGE_KEY = "otp_extension_entries_v3";
+const LEGACY_STORAGE_KEY = "otp_extension_entries_v2";
 const ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 const SETTINGS_KEY = "otp_extension_settings_v1";
 const UI_KEY = "otp_extension_ui_v1";
@@ -35,6 +36,9 @@ const secretInput = document.getElementById("secret");
 const tagsInput = document.getElementById("tags");
 const digitsInput = document.getElementById("digits");
 const periodInput = document.getElementById("period");
+const entryTypeSelect = document.getElementById("entry-type");
+const counterInput = document.getElementById("counter");
+const algorithmSelect = document.getElementById("algorithm");
 const qrFileInput = document.getElementById("qr-file");
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort-select");
@@ -72,6 +76,8 @@ const editSecretInput = document.getElementById("edit-secret");
 const editTagsInput = document.getElementById("edit-tags");
 const editDigitsInput = document.getElementById("edit-digits");
 const editPeriodInput = document.getElementById("edit-period");
+const editCounterInput = document.getElementById("edit-counter");
+const editAlgorithmSelect = document.getElementById("edit-algorithm");
 const editStatus = document.getElementById("edit-status");
 const cancelEditBtn = document.getElementById("cancel-edit");
 const saveEditBtn = document.getElementById("save-edit");
@@ -90,7 +96,7 @@ let lastActivity = Date.now();
 initialize();
 
 async function initialize() {
-  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
+  const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
   settings = { encrypt: false, sortBy: "alpha", autoLockMinutes: 15, ...(stored[SETTINGS_KEY] || {}) };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
@@ -115,7 +121,10 @@ async function initialize() {
       setLocked(true);
     }
   } else {
-    entries = normalizeEntries(stored[STORAGE_KEY]);
+    // v3 authoritative; legacy v2 consulted only while v3 is absent (and
+    // never deleted — older bundles may still read it).
+    const rawEntries = stored[STORAGE_KEY] ?? stored[LEGACY_STORAGE_KEY];
+    entries = normalizeEntries(rawEntries);
     if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
     setLocked(false);
   }
@@ -320,6 +329,19 @@ function refreshEntryNode(node, entry) {
   node.querySelector(".account").textContent = parts.account;
   node.querySelector(".meta").textContent = `${entry.digits} digits • ${entry.period}s`;
 
+  const algoBadge = node.querySelector(".algo");
+  if (algoBadge) {
+    const showAlgo = entry.algorithm && entry.algorithm !== "SHA1";
+    algoBadge.textContent = showAlgo ? entry.algorithm.replace(/^SHA/, "SHA-") : "";
+    algoBadge.classList.toggle("hidden", !showAlgo);
+  }
+  const counterBadge = node.querySelector(".counter");
+  if (counterBadge) {
+    const isHotp = entry.type === "hotp";
+    counterBadge.textContent = isHotp ? `#${entry.counter}` : "";
+    counterBadge.classList.toggle("hidden", !isHotp);
+  }
+
   const tagRoot = node.querySelector(".tags");
   tagRoot.innerHTML = "";
   for (const tag of entry.tags || []) {
@@ -382,6 +404,9 @@ function openEditEntryDialog(entry) {
   editTagsInput.value = (entry.tags || []).join(", ");
   editDigitsInput.value = String(entry.digits);
   editPeriodInput.value = String(entry.period);
+  editAlgorithmSelect.value = entry.algorithm || "SHA1";
+  editCounterInput?.classList.toggle("hidden", entry.type !== "hotp");
+  if (editCounterInput) editCounterInput.value = String(entry.type === "hotp" ? entry.counter : 0);
   setStatus(editStatus, "");
   editEntryDialog.showModal();
 }
@@ -398,6 +423,8 @@ async function saveEditedEntry() {
     tags: normalizeTags(editTagsInput.value),
     digits: Number(editDigitsInput.value),
     period: Number(editPeriodInput.value),
+    algorithm: editAlgorithmSelect.value,
+    counter: current.type === "hotp" && editCounterInput ? Number(editCounterInput.value) : current.counter,
     order: current.order,
   });
 
@@ -439,11 +466,23 @@ function createEntryNode(entry) {
       await navigator.clipboard.writeText(otp);
       addCopyHistory(entry.label, otp);
       setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
+      await consumeHotpCounter(entry);
     } catch (error) {
       reportError("Extension copy failed", error);
       setMainStatus(toUserMessage(error, "Could not copy OTP"), "error");
     }
   });
+
+  // HOTP counter-increment-on-copy with visible failure toast (FR9).
+  async function consumeHotpCounter(currentEntry) {
+    if (currentEntry.type !== "hotp") return;
+    try {
+      await replaceEntries(entries.map((item) => item.id === currentEntry.id ? { ...item, counter: item.counter + 1 } : item));
+    } catch (error) {
+      reportError("HOTP counter persist failed (copy)", error);
+      setMainStatus("Counter save failed — the next code may repeat. Edit the entry to set the counter manually.", "error");
+    }
+  }
 
   node.querySelector(".edit")?.addEventListener("click", () => {
     openEditEntryDialog(entry);
@@ -523,13 +562,23 @@ async function updateEntryNode(entry, now) {
   const node = entryNodes.get(entry.id);
   if (!node) return;
   try {
-    const remaining = entry.period - (now % entry.period);
-    const code = await generateTotp(entry.secret, entry.digits, entry.period, now);
+    let code;
+    if (entry.type === "hotp") {
+      // HOTP renders the deterministic code for the persisted counter; the
+      // counter advances only on copy (no rolling timer, FR8).
+      node.querySelector(".seconds").textContent = `#${entry.counter}`;
+      node.querySelector(".bar").style.transform = "scaleX(1)";
+      node.classList.toggle("urgent", false);
+      code = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
+    } else {
+      const remaining = entry.period - (now % entry.period);
+      code = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
+      node.querySelector(".seconds").textContent = `${remaining}s`;
+      node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
+      node.classList.toggle("urgent", remaining <= 10);
+    }
     node.dataset.otp = code;
     node.querySelector(".code").textContent = formatCode(code);
-    node.querySelector(".seconds").textContent = `${remaining}s`;
-    node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
-    node.classList.toggle("urgent", remaining <= 10);
   } catch (error) {
     reportError("Extension OTP generation failed", error);
     node.querySelector(".code").textContent = "Invalid";
@@ -569,9 +618,10 @@ async function tick() {
 }
 
 async function snapshotVaultArtifacts() {
-  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY]);
+  const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY]);
   return {
     plain: stored[STORAGE_KEY] ?? null,
+    legacyPlain: stored[LEGACY_STORAGE_KEY] ?? null,
     encrypted: stored[ENCRYPTED_KEY] ?? null
   };
 }
@@ -583,6 +633,11 @@ async function restoreVaultArtifacts(snapshot) {
     removes.push(STORAGE_KEY);
   } else {
     updates[STORAGE_KEY] = snapshot.plain;
+  }
+  if (snapshot.legacyPlain === null) {
+    removes.push(LEGACY_STORAGE_KEY);
+  } else {
+    updates[LEGACY_STORAGE_KEY] = snapshot.legacyPlain;
   }
   if (snapshot.encrypted === null) {
     removes.push(ENCRYPTED_KEY);
@@ -596,7 +651,7 @@ async function restoreVaultArtifacts(snapshot) {
 async function saveEncryptedEntries(payloadEntries, passphrase) {
   const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
   await chrome.storage.local.set({ [ENCRYPTED_KEY]: encryptedPayload });
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.remove([STORAGE_KEY, LEGACY_STORAGE_KEY]);
 }
 
 async function persistEntries() {
@@ -667,6 +722,9 @@ function bindEvents() {
         label: labelInput.value,
         secret: secretInput.value,
         tags: normalizeTags(tagsInput.value),
+        type: entryTypeSelect?.value || "totp",
+        counter: entryTypeSelect?.value === "hotp" ? Number(counterInput?.value || 0) : 0,
+        algorithm: algorithmSelect?.value || "SHA1",
         digits: Number(digitsInput.value),
         period: Number(periodInput.value),
       });
@@ -674,11 +732,16 @@ function bindEvents() {
       tagsInput.value = "";
       digitsInput.value = "6";
       periodInput.value = "30";
+      counterInput?.classList.add("hidden");
       setMainStatus("Entry added", "success");
     } catch (error) {
       reportError("Extension manual entry failed", error);
       setMainStatus(toUserMessage(error, "Could not add entry"), "error");
     }
+  });
+
+  entryTypeSelect?.addEventListener("change", () => {
+    counterInput?.classList.toggle("hidden", entryTypeSelect.value !== "hotp");
   });
 
   qrFileInput.addEventListener("change", async () => {

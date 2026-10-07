@@ -31,6 +31,18 @@
         <input id="secret" type="text" placeholder="Base32 secret" required>
         <input id="tags" type="text" placeholder="Tags: work, infra">
         <div class="row two-up">
+          <select id="entry-type">
+            <option value="totp" selected>TOTP (timed)</option>
+            <option value="hotp">HOTP (counter)</option>
+          </select>
+          <select id="algorithm">
+            <option value="SHA1" selected>SHA-1</option>
+            <option value="SHA256">SHA-256</option>
+            <option value="SHA512">SHA-512</option>
+          </select>
+        </div>
+        <div class="row two-up">
+          <input id="counter" type="number" min="0" value="0" class="hidden">
           <select id="digits">
             <option value="6">6 digits</option>
             <option value="8">8 digits</option>
@@ -154,6 +166,8 @@
 
       <div class="entry-bottom">
         <span class="meta"></span>
+        <span class="algo hidden"></span>
+        <span class="counter hidden"></span>
         <div class="mini-timer">
           <span class="seconds"></span>
           <div class="timer-track"><div class="bar"></div></div>
@@ -173,11 +187,19 @@
     <input id="edit-label" type="text" placeholder="Label">
     <input id="edit-secret" type="text" placeholder="Base32 secret">
     <input id="edit-tags" type="text" placeholder="Tags">
+    <input id="edit-counter" type="number" min="0" value="0" class="hidden" placeholder="HOTP counter">
     <div class="row two-up">
+      <select id="edit-algorithm">
+        <option value="SHA1">SHA-1</option>
+        <option value="SHA256">SHA-256</option>
+        <option value="SHA512">SHA-512</option>
+      </select>
       <select id="edit-digits">
         <option value="6">6 digits</option>
         <option value="8">8 digits</option>
       </select>
+    </div>
+    <div class="row two-up">
       <input id="edit-period" type="number" min="15" max="120">
     </div>
     <p id="edit-status" class="status" aria-live="polite"></p>

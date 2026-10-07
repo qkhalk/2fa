@@ -3,6 +3,10 @@ var BASE32_REGEX = /^[A-Z2-7]+$/;
 var OTP_URI_REGEX = /otpauth:\/\/[^\s"'<>]+/gi;
 var MIN_PERIOD = 15;
 var MAX_PERIOD = 120;
+var OTP_TYPES = ["totp", "hotp"];
+var OTP_ALGORITHMS = ["SHA1", "SHA256", "SHA512"];
+var HMAC_HASH_NAMES = { SHA1: "SHA-1", SHA256: "SHA-256", SHA512: "SHA-512" };
+var MAX_SAFE_COUNTER = Number.MAX_SAFE_INTEGER;
 var OtpVaultError = class extends Error {
   constructor(message, { code = "OTP_VAULT_ERROR", cause } = {}) {
     super(message, cause ? { cause } : void 0);
@@ -67,6 +71,28 @@ function ensurePeriod(period) {
   }
   return value;
 }
+function ensureType(type) {
+  const value = String(type || "totp").toLowerCase();
+  if (!OTP_TYPES.includes(value)) {
+    throw new OtpVaultError("OTP type must be totp or hotp", { code: "OTP_TYPE_INVALID" });
+  }
+  return value;
+}
+function ensureAlgorithm(algorithm) {
+  const value = String(algorithm || "SHA1").toUpperCase();
+  if (!OTP_ALGORITHMS.includes(value)) {
+    throw new OtpVaultError("OTP algorithm must be SHA1, SHA256, or SHA512", { code: "ALGORITHM_UNSUPPORTED" });
+  }
+  return value;
+}
+function ensureCounter(counter) {
+  if (counter === void 0 || counter === null || counter === "") return 0;
+  const value = Number(counter);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SAFE_COUNTER) {
+    throw new OtpVaultError("HOTP counter must be a non-negative integer", { code: "COUNTER_INVALID" });
+  }
+  return value;
+}
 function createFallbackLabel(secret) {
   const clean = sanitizeBase32(secret);
   if (clean.length <= 8) return `Secret ${clean || "entry"}`;
@@ -78,10 +104,14 @@ function normalizeLabel(label, secret) {
 }
 function normalizeEntry(entry) {
   const secret = ensureBase32Secret(entry.secret || "");
+  const type = ensureType(entry.type);
   return {
     id: entry.id || generateEntryId(),
     label: normalizeLabel(entry.label, secret),
     secret,
+    type,
+    counter: type === "hotp" ? ensureCounter(entry.counter) : 0,
+    algorithm: ensureAlgorithm(entry.algorithm),
     digits: ensureDigits(entry.digits ?? 6),
     period: ensurePeriod(entry.period ?? 30),
     pinned: Boolean(entry.pinned),
@@ -139,12 +169,21 @@ function parseOtpAuthUri(uri) {
   if (parsed.protocol !== "otpauth:") {
     throw new OtpVaultError("URI must start with otpauth://", { code: "URI_PROTOCOL" });
   }
-  if (parsed.hostname.toLowerCase() !== "totp") {
-    throw new OtpVaultError("Only TOTP URIs are supported", { code: "URI_TYPE" });
+  const type = parsed.hostname.toLowerCase();
+  if (type !== "totp" && type !== "hotp") {
+    throw new OtpVaultError("Only TOTP and HOTP URIs are supported", { code: "URI_TYPE" });
   }
   const algorithm = (parsed.searchParams.get("algorithm") || "SHA1").toUpperCase();
-  if (algorithm !== "SHA1") {
-    throw new OtpVaultError("Only SHA1 TOTP URIs are supported", { code: "URI_ALGORITHM" });
+  if (!OTP_ALGORITHMS.includes(algorithm)) {
+    throw new OtpVaultError("Only SHA1, SHA256, and SHA512 OTP URIs are supported", { code: "URI_ALGORITHM" });
+  }
+  let counter;
+  if (type === "hotp") {
+    const counterParam = parsed.searchParams.get("counter");
+    counter = counterParam === null ? 0 : Number(counterParam);
+    if (!Number.isInteger(counter) || counter < 0 || counter > MAX_SAFE_COUNTER) {
+      throw new OtpVaultError("HOTP counter must be a non-negative integer", { code: "URI_COUNTER" });
+    }
   }
   const issuerParam = safeDecode(parsed.searchParams.get("issuer") || "").trim();
   const rawLabel = safeDecode(parsed.pathname.replace(/^\/+/, "")).trim();
@@ -158,8 +197,12 @@ function parseOtpAuthUri(uri) {
   return normalizeEntry({
     label,
     secret: parsed.searchParams.get("secret") || "",
+    type,
+    counter,
+    algorithm,
+    // Period is meaningless for HOTP but stored so the entry shape stays valid.
     digits: parsed.searchParams.has("digits") ? Number(parsed.searchParams.get("digits")) : 6,
-    period: parsed.searchParams.has("period") ? Number(parsed.searchParams.get("period")) : 30
+    period: type === "hotp" ? 30 : parsed.searchParams.has("period") ? Number(parsed.searchParams.get("period")) : 30
   });
 }
 function extractOtpAuthUri(rawText) {
@@ -219,23 +262,33 @@ function toCounterBytes(counter) {
   }
   return bytes;
 }
-async function hmacSha1(keyBytes, messageBytes, cryptoApi = globalThis.crypto) {
+async function hmac(keyBytes, messageBytes, hash, cryptoApi = globalThis.crypto) {
   if (!cryptoApi?.subtle) {
     throw new OtpVaultError("Browser crypto support is unavailable", { code: "CRYPTO_UNAVAILABLE" });
   }
-  const key = await cryptoApi.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const algorithmName = HMAC_HASH_NAMES[hash] || hash;
+  const key = await cryptoApi.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: algorithmName }, false, ["sign"]);
   const signature = await cryptoApi.subtle.sign("HMAC", key, messageBytes);
   return new Uint8Array(signature);
 }
-async function generateTotp(secret, digits, period, now, cryptoApi = globalThis.crypto) {
+function truncateDigest(digest, digits) {
+  const offset = digest[digest.length - 1] & 15;
+  const binary = (digest[offset] & 127) << 24 | digest[offset + 1] << 16 | digest[offset + 2] << 8 | digest[offset + 3];
+  return (binary % 10 ** digits).toString().padStart(digits, "0");
+}
+async function generateTotp(secret, digits, period, now, algorithm = "SHA1", cryptoApi = globalThis.crypto) {
   const normalizedSecret = ensureBase32Secret(secret);
   const normalizedDigits = ensureDigits(digits);
   const normalizedPeriod = ensurePeriod(period);
+  const normalizedAlgorithm = ensureAlgorithm(algorithm);
   const counter = Math.floor(now / normalizedPeriod);
-  const digest = await hmacSha1(base32ToBytes(normalizedSecret), toCounterBytes(counter), cryptoApi);
-  const offset = digest[digest.length - 1] & 15;
-  const binary = (digest[offset] & 127) << 24 | digest[offset + 1] << 16 | digest[offset + 2] << 8 | digest[offset + 3];
-  return (binary % 10 ** normalizedDigits).toString().padStart(normalizedDigits, "0");
+  const digest = await hmac(
+    base32ToBytes(normalizedSecret),
+    toCounterBytes(counter),
+    normalizedAlgorithm,
+    cryptoApi
+  );
+  return truncateDigest(digest, normalizedDigits);
 }
 function formatCode(code) {
   if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -478,7 +531,8 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
 }
 
 // extension/popup.js
-var STORAGE_KEY = "otp_extension_entries_v2";
+var STORAGE_KEY = "otp_extension_entries_v3";
+var LEGACY_STORAGE_KEY = "otp_extension_entries_v2";
 var ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 var SETTINGS_KEY = "otp_extension_settings_v1";
 var UI_KEY = "otp_extension_ui_v1";
@@ -490,6 +544,9 @@ var secretInput = document.getElementById("secret");
 var tagsInput = document.getElementById("tags");
 var digitsInput = document.getElementById("digits");
 var periodInput = document.getElementById("period");
+var entryTypeSelect = document.getElementById("entry-type");
+var counterInput = document.getElementById("counter");
+var algorithmSelect = document.getElementById("algorithm");
 var qrFileInput = document.getElementById("qr-file");
 var searchInput = document.getElementById("search");
 var sortSelect = document.getElementById("sort-select");
@@ -527,6 +584,8 @@ var editSecretInput = document.getElementById("edit-secret");
 var editTagsInput = document.getElementById("edit-tags");
 var editDigitsInput = document.getElementById("edit-digits");
 var editPeriodInput = document.getElementById("edit-period");
+var editCounterInput = document.getElementById("edit-counter");
+var editAlgorithmSelect = document.getElementById("edit-algorithm");
 var editStatus = document.getElementById("edit-status");
 var cancelEditBtn = document.getElementById("cancel-edit");
 var saveEditBtn = document.getElementById("save-edit");
@@ -542,7 +601,7 @@ var confirmRemoveCallback = null;
 var lastActivity = Date.now();
 initialize();
 async function initialize() {
-  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
+  const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
   settings = { encrypt: false, sortBy: "alpha", autoLockMinutes: 15, ...stored[SETTINGS_KEY] || {} };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
@@ -564,7 +623,8 @@ async function initialize() {
       setLocked(true);
     }
   } else {
-    entries = normalizeEntries(stored[STORAGE_KEY]);
+    const rawEntries = stored[STORAGE_KEY] ?? stored[LEGACY_STORAGE_KEY];
+    entries = normalizeEntries(rawEntries);
     if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
     setLocked(false);
   }
@@ -741,6 +801,18 @@ function refreshEntryNode(node, entry) {
   node.querySelector(".issuer").textContent = parts.issuer;
   node.querySelector(".account").textContent = parts.account;
   node.querySelector(".meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+  const algoBadge = node.querySelector(".algo");
+  if (algoBadge) {
+    const showAlgo = entry.algorithm && entry.algorithm !== "SHA1";
+    algoBadge.textContent = showAlgo ? entry.algorithm.replace(/^SHA/, "SHA-") : "";
+    algoBadge.classList.toggle("hidden", !showAlgo);
+  }
+  const counterBadge = node.querySelector(".counter");
+  if (counterBadge) {
+    const isHotp = entry.type === "hotp";
+    counterBadge.textContent = isHotp ? `#${entry.counter}` : "";
+    counterBadge.classList.toggle("hidden", !isHotp);
+  }
   const tagRoot = node.querySelector(".tags");
   tagRoot.innerHTML = "";
   for (const tag of entry.tags || []) {
@@ -797,6 +869,9 @@ function openEditEntryDialog(entry) {
   editTagsInput.value = (entry.tags || []).join(", ");
   editDigitsInput.value = String(entry.digits);
   editPeriodInput.value = String(entry.period);
+  editAlgorithmSelect.value = entry.algorithm || "SHA1";
+  editCounterInput?.classList.toggle("hidden", entry.type !== "hotp");
+  if (editCounterInput) editCounterInput.value = String(entry.type === "hotp" ? entry.counter : 0);
   setStatus(editStatus, "");
   editEntryDialog.showModal();
 }
@@ -811,6 +886,8 @@ async function saveEditedEntry() {
     tags: normalizeTags(editTagsInput.value),
     digits: Number(editDigitsInput.value),
     period: Number(editPeriodInput.value),
+    algorithm: editAlgorithmSelect.value,
+    counter: current.type === "hotp" && editCounterInput ? Number(editCounterInput.value) : current.counter,
     order: current.order
   });
   if (entries.some((entry) => entry.id !== id && entry.secret === updated.secret && entry.digits === updated.digits && entry.period === updated.period)) {
@@ -846,11 +923,21 @@ function createEntryNode(entry) {
       await navigator.clipboard.writeText(otp);
       addCopyHistory(entry.label, otp);
       setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
+      await consumeHotpCounter(entry);
     } catch (error) {
       reportError("Extension copy failed", error);
       setMainStatus(toUserMessage(error, "Could not copy OTP"), "error");
     }
   });
+  async function consumeHotpCounter(currentEntry) {
+    if (currentEntry.type !== "hotp") return;
+    try {
+      await replaceEntries(entries.map((item) => item.id === currentEntry.id ? { ...item, counter: item.counter + 1 } : item));
+    } catch (error) {
+      reportError("HOTP counter persist failed (copy)", error);
+      setMainStatus("Counter save failed \u2014 the next code may repeat. Edit the entry to set the counter manually.", "error");
+    }
+  }
   node.querySelector(".edit")?.addEventListener("click", () => {
     openEditEntryDialog(entry);
   });
@@ -921,13 +1008,21 @@ async function updateEntryNode(entry, now) {
   const node = entryNodes.get(entry.id);
   if (!node) return;
   try {
-    const remaining = entry.period - now % entry.period;
-    const code = await generateTotp(entry.secret, entry.digits, entry.period, now);
+    let code;
+    if (entry.type === "hotp") {
+      node.querySelector(".seconds").textContent = `#${entry.counter}`;
+      node.querySelector(".bar").style.transform = "scaleX(1)";
+      node.classList.toggle("urgent", false);
+      code = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
+    } else {
+      const remaining = entry.period - now % entry.period;
+      code = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
+      node.querySelector(".seconds").textContent = `${remaining}s`;
+      node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
+      node.classList.toggle("urgent", remaining <= 10);
+    }
     node.dataset.otp = code;
     node.querySelector(".code").textContent = formatCode(code);
-    node.querySelector(".seconds").textContent = `${remaining}s`;
-    node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
-    node.classList.toggle("urgent", remaining <= 10);
   } catch (error) {
     reportError("Extension OTP generation failed", error);
     node.querySelector(".code").textContent = "Invalid";
@@ -963,9 +1058,10 @@ async function tick() {
   await Promise.all(filteredEntries().map((entry) => updateEntryNode(entry, now)));
 }
 async function snapshotVaultArtifacts() {
-  const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY]);
+  const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY]);
   return {
     plain: stored[STORAGE_KEY] ?? null,
+    legacyPlain: stored[LEGACY_STORAGE_KEY] ?? null,
     encrypted: stored[ENCRYPTED_KEY] ?? null
   };
 }
@@ -976,6 +1072,11 @@ async function restoreVaultArtifacts(snapshot) {
     removes.push(STORAGE_KEY);
   } else {
     updates[STORAGE_KEY] = snapshot.plain;
+  }
+  if (snapshot.legacyPlain === null) {
+    removes.push(LEGACY_STORAGE_KEY);
+  } else {
+    updates[LEGACY_STORAGE_KEY] = snapshot.legacyPlain;
   }
   if (snapshot.encrypted === null) {
     removes.push(ENCRYPTED_KEY);
@@ -988,7 +1089,7 @@ async function restoreVaultArtifacts(snapshot) {
 async function saveEncryptedEntries(payloadEntries, passphrase) {
   const encryptedPayload = await encryptEntries(payloadEntries, passphrase);
   await chrome.storage.local.set({ [ENCRYPTED_KEY]: encryptedPayload });
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.remove([STORAGE_KEY, LEGACY_STORAGE_KEY]);
 }
 async function persistEntries() {
   const previousArtifacts = await snapshotVaultArtifacts();
@@ -1053,6 +1154,9 @@ function bindEvents() {
         label: labelInput.value,
         secret: secretInput.value,
         tags: normalizeTags(tagsInput.value),
+        type: entryTypeSelect?.value || "totp",
+        counter: entryTypeSelect?.value === "hotp" ? Number(counterInput?.value || 0) : 0,
+        algorithm: algorithmSelect?.value || "SHA1",
         digits: Number(digitsInput.value),
         period: Number(periodInput.value)
       });
@@ -1060,11 +1164,15 @@ function bindEvents() {
       tagsInput.value = "";
       digitsInput.value = "6";
       periodInput.value = "30";
+      counterInput?.classList.add("hidden");
       setMainStatus("Entry added", "success");
     } catch (error) {
       reportError("Extension manual entry failed", error);
       setMainStatus(toUserMessage(error, "Could not add entry"), "error");
     }
+  });
+  entryTypeSelect?.addEventListener("change", () => {
+    counterInput?.classList.toggle("hidden", entryTypeSelect.value !== "hotp");
   });
   qrFileInput.addEventListener("change", async () => {
     const [file] = qrFileInput.files || [];

@@ -1095,3 +1095,19 @@ textarea {
 .vault-stale-banner.hidden {
   display: none;
 }
+
+/* Phase 3: algorithm and HOTP counter badges */
+.entry-algo,
+.entry-counter {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--accent-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
+.entry-algo.hidden,
+.entry-counter.hidden {
+  display: none;
+}

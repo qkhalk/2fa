@@ -107,6 +107,28 @@
                 </label>
 
                 <label>
+                  <span>Type</span>
+                  <select id="entry-type" name="entry-type">
+                    <option value="totp" selected>TOTP (timed)</option>
+                    <option value="hotp">HOTP (counter)</option>
+                  </select>
+                </label>
+
+                <label id="counter-field" class="hidden">
+                  <span>Counter</span>
+                  <input id="counter" name="counter" type="number" min="0" value="0" required>
+                </label>
+
+                <label>
+                  <span>Algorithm</span>
+                  <select id="algorithm" name="algorithm">
+                    <option value="SHA1" selected>SHA-1</option>
+                    <option value="SHA256">SHA-256</option>
+                    <option value="SHA512">SHA-512</option>
+                  </select>
+                </label>
+
+                <label>
                   <span>Digits</span>
                   <select id="digits" name="digits">
                     <option value="6" selected>6</option>
@@ -345,6 +367,8 @@
         <p class="entry-code">------</p>
         <div class="entry-countdown">
           <span class="entry-seconds"></span>
+          <span class="entry-algo hidden"></span>
+          <span class="entry-counter hidden"></span>
           <div class="entry-track"><div class="entry-bar"></div></div>
         </div>
       </div>
@@ -425,6 +449,18 @@
       <label>
         <span>Secret</span>
         <input id="edit-secret" type="text" placeholder="JBSWY3DPEHPK3PXP">
+      </label>
+      <label id="edit-counter-field" class="hidden">
+        <span>HOTP counter</span>
+        <input id="edit-counter" type="number" min="0" value="0">
+      </label>
+      <label>
+        <span>Algorithm</span>
+        <select id="edit-algorithm">
+          <option value="SHA1">SHA-1</option>
+          <option value="SHA256">SHA-256</option>
+          <option value="SHA512">SHA-512</option>
+        </select>
       </label>
       <label>
         <span>Tags</span>

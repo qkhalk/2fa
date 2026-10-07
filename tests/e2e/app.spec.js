@@ -402,7 +402,7 @@ test("preserves entries when clear all persistence fails", async ({ page }) => {
     window.__blockNextPlainWrite = false;
     const originalSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) {
-      if (key === "personal_otp_vault_entries_v2" && window.__blockNextPlainWrite) {
+      if (key === "personal_otp_vault_entries_v3" && window.__blockNextPlainWrite) {
         window.__blockNextPlainWrite = false;
         throw new Error("Simulated clear-all persistence failure");
       }
@@ -423,7 +423,7 @@ test("preserves entries when clear all persistence fails", async ({ page }) => {
   await expect(page.locator(".entry")).toHaveCount(1);
   await expect(page.locator(".entry-label")).toHaveText("Survivor");
 
-  await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_entries_v2"))).not.toBeNull();
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("personal_otp_vault_entries_v3"))).not.toBeNull();
 });
 
 test("preserves entries when replace-mode backup import persistence fails", async ({ page }) => {
@@ -444,7 +444,7 @@ test("preserves entries when replace-mode backup import persistence fails", asyn
     window.__blockNextPlainWrite = false;
     const originalSetItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) {
-      if (key === "personal_otp_vault_entries_v2" && window.__blockNextPlainWrite) {
+      if (key === "personal_otp_vault_entries_v3" && window.__blockNextPlainWrite) {
         window.__blockNextPlainWrite = false;
         throw new Error("Simulated replace persistence failure");
       }
