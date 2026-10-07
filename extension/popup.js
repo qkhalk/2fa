@@ -1790,60 +1790,70 @@ function bindEvents() {
     }
   });
 
+  let unlockInFlight = false;
   unlockForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const guard = await readUnlockGuard();
-    const now = Date.now();
-    if (guard.lockedUntil > now) {
-      setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - now) / 1000)}s`, "error");
-      return;
-    }
-    unlockBtn.disabled = true;
+    // Serialize attempts: the guard read is async, so two concurrent submits
+    // both read the same attempts count and the lost increment delays the
+    // backoff lockout (throttle bypass).
+    if (unlockInFlight) return;
+    unlockInFlight = true;
     try {
-      const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
-      const payload = stored[ENCRYPTED_KEY];
-      // One consistent read: the input can be retyped during the ~400ms KDF,
-      // and derive/decrypt must never see different passphrases.
-      const candidate = unlockPassphraseInput.value;
-      let keyHandle;
-      if (isDekEncryptedPayload(payload)) {
-        // Passphrase recovery in DEK mode (FR4): unwrap + hold the DEK so
-        // saves keep working; the DEK itself is the session-cache handle.
-        heldDek = await unwrapDekWithPassphrase(payload, normalizePassphrase(candidate));
-        dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
-        keyHandle = heldDek;
-        entries = resequenceIfUnordered(await decryptVaultEntriesWithKey(heldDek, payload));
-      } else {
-        heldDek = null;
-        dekEnvelopeMeta = null;
-        keyHandle = await deriveVaultKeyFromPayload(payload, normalizePassphrase(candidate));
-        entries = resequenceIfUnordered(await decryptVaultEntries(payload, candidate));
+      const guard = await readUnlockGuard();
+      const now = Date.now();
+      if (guard.lockedUntil > now) {
+        setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - now) / 1000)}s`, "error");
+        return;
       }
-      currentPassphrase = normalizePassphrase(candidate);
-      // Legacy (pre-600k) envelopes re-encrypt at the current default right
-      // after a successful unlock; failure leaves the old envelope intact.
-      if (isLegacyEncryptedPayload(payload)) {
-        await persistEntries();
+      unlockBtn.disabled = true;
+      try {
+        const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+        const payload = stored[ENCRYPTED_KEY];
+        // One consistent read: the input can be retyped during the ~400ms KDF,
+        // and derive/decrypt must never see different passphrases.
+        const candidate = unlockPassphraseInput.value;
+        let keyHandle;
+        if (isDekEncryptedPayload(payload)) {
+          // Passphrase recovery in DEK mode (FR4): unwrap + hold the DEK so
+          // saves keep working; the DEK itself is the session-cache handle.
+          heldDek = await unwrapDekWithPassphrase(payload, normalizePassphrase(candidate));
+          dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+          keyHandle = heldDek;
+          entries = resequenceIfUnordered(await decryptVaultEntriesWithKey(heldDek, payload));
+        } else {
+          heldDek = null;
+          dekEnvelopeMeta = null;
+          keyHandle = await deriveVaultKeyFromPayload(payload, normalizePassphrase(candidate));
+          entries = resequenceIfUnordered(await decryptVaultEntries(payload, candidate));
+        }
+        currentPassphrase = normalizePassphrase(candidate);
+        // Legacy (pre-600k) envelopes re-encrypt at the current default right
+        // after a successful unlock; failure leaves the old envelope intact.
+        if (isLegacyEncryptedPayload(payload)) {
+          await persistEntries();
+        }
+        // Session cache: derive the AES-GCM key once and cache the CryptoKey
+        // (structured-cloneable) so the next popup open skips the 600k KDF.
+        await writeSessionUnlock(payload, currentPassphrase, keyHandle);
+        await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
+        unlockPassphraseInput.value = "";
+        setLocked(false);
+        renderEntries();
+        tick();
+        setUnlockStatus("Vault unlocked", "success");
+        setMainStatus("Encrypted extension unlocked", "success");
+      } catch (error) {
+        const attempts = guard.attempts + 1;
+        const backoff = unlockBackoffSeconds(attempts);
+        await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
+        const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
+        reportError("Extension unlock failed", error);
+        setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
+      } finally {
+        unlockBtn.disabled = false;
       }
-      // Session cache: derive the AES-GCM key once and cache the CryptoKey
-      // (structured-cloneable) so the next popup open skips the 600k KDF.
-      await writeSessionUnlock(payload, currentPassphrase, keyHandle);
-      await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
-      unlockPassphraseInput.value = "";
-      setLocked(false);
-      renderEntries();
-      tick();
-      setUnlockStatus("Vault unlocked", "success");
-      setMainStatus("Encrypted extension unlocked", "success");
-    } catch (error) {
-      const attempts = guard.attempts + 1;
-      const backoff = unlockBackoffSeconds(attempts);
-      await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
-      const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
-      reportError("Extension unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
     } finally {
-      unlockBtn.disabled = false;
+      unlockInFlight = false;
     }
   });
 

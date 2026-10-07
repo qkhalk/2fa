@@ -2967,52 +2967,59 @@ function bindEvents() {
       setMainStatus(toUserMessage(error, "Could not disable biometric unlock"), "error");
     }
   });
+  let unlockInFlight = false;
   unlockForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const guard = await readUnlockGuard();
-    const now = Date.now();
-    if (guard.lockedUntil > now) {
-      setUnlockStatus(`Too many failed attempts \u2014 unlock available in ${Math.ceil((guard.lockedUntil - now) / 1e3)}s`, "error");
-      return;
-    }
-    unlockBtn.disabled = true;
+    if (unlockInFlight) return;
+    unlockInFlight = true;
     try {
-      const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
-      const payload = stored[ENCRYPTED_KEY];
-      const candidate = unlockPassphraseInput.value;
-      let keyHandle;
-      if (isDekEncryptedPayload(payload)) {
-        heldDek = await unwrapDekWithPassphrase(payload, normalizePassphrase(candidate));
-        dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
-        keyHandle = heldDek;
-        entries = resequenceIfUnordered(await decryptVaultEntriesWithKey(heldDek, payload));
-      } else {
-        heldDek = null;
-        dekEnvelopeMeta = null;
-        keyHandle = await deriveVaultKeyFromPayload(payload, normalizePassphrase(candidate));
-        entries = resequenceIfUnordered(await decryptVaultEntries(payload, candidate));
+      const guard = await readUnlockGuard();
+      const now = Date.now();
+      if (guard.lockedUntil > now) {
+        setUnlockStatus(`Too many failed attempts \u2014 unlock available in ${Math.ceil((guard.lockedUntil - now) / 1e3)}s`, "error");
+        return;
       }
-      currentPassphrase = normalizePassphrase(candidate);
-      if (isLegacyEncryptedPayload(payload)) {
-        await persistEntries();
+      unlockBtn.disabled = true;
+      try {
+        const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+        const payload = stored[ENCRYPTED_KEY];
+        const candidate = unlockPassphraseInput.value;
+        let keyHandle;
+        if (isDekEncryptedPayload(payload)) {
+          heldDek = await unwrapDekWithPassphrase(payload, normalizePassphrase(candidate));
+          dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+          keyHandle = heldDek;
+          entries = resequenceIfUnordered(await decryptVaultEntriesWithKey(heldDek, payload));
+        } else {
+          heldDek = null;
+          dekEnvelopeMeta = null;
+          keyHandle = await deriveVaultKeyFromPayload(payload, normalizePassphrase(candidate));
+          entries = resequenceIfUnordered(await decryptVaultEntries(payload, candidate));
+        }
+        currentPassphrase = normalizePassphrase(candidate);
+        if (isLegacyEncryptedPayload(payload)) {
+          await persistEntries();
+        }
+        await writeSessionUnlock(payload, currentPassphrase, keyHandle);
+        await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
+        unlockPassphraseInput.value = "";
+        setLocked(false);
+        renderEntries();
+        tick();
+        setUnlockStatus("Vault unlocked", "success");
+        setMainStatus("Encrypted extension unlocked", "success");
+      } catch (error) {
+        const attempts = guard.attempts + 1;
+        const backoff = unlockBackoffSeconds(attempts);
+        await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1e3 : 0 });
+        const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
+        reportError("Extension unlock failed", error);
+        setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
+      } finally {
+        unlockBtn.disabled = false;
       }
-      await writeSessionUnlock(payload, currentPassphrase, keyHandle);
-      await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
-      unlockPassphraseInput.value = "";
-      setLocked(false);
-      renderEntries();
-      tick();
-      setUnlockStatus("Vault unlocked", "success");
-      setMainStatus("Encrypted extension unlocked", "success");
-    } catch (error) {
-      const attempts = guard.attempts + 1;
-      const backoff = unlockBackoffSeconds(attempts);
-      await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1e3 : 0 });
-      const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
-      reportError("Extension unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
     } finally {
-      unlockBtn.disabled = false;
+      unlockInFlight = false;
     }
   });
   cancelEditBtn.addEventListener("click", () => {

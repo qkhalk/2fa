@@ -1219,11 +1219,20 @@ test("extension throttles unlock attempts with backoff and recovers", async () =
     await page.locator("#lock-btn").click();
     await expect(page.locator("#unlock-panel")).toBeVisible();
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    // Wait on the persisted guard instead of the status text: the previous
+    // attempt's identical "Incorrect passphrase" message satisfies a text
+    // match immediately and lets the next click race the in-flight attempt.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
       await page.locator("#unlock-passphrase").fill("wrong wrong wrong");
       await page.locator("#unlock-btn").click();
-      await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
-      await expect(page.locator("#unlock-btn")).toBeEnabled();
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const stored = await chrome.storage.local.get("otp_extension_unlock_guard_v1");
+            return stored.otp_extension_unlock_guard_v1?.attempts ?? 0;
+          })
+        )
+        .toBe(attempt);
     }
 
     // Backoff active: countdown visible, button disabled, guard persisted.
