@@ -5,14 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0f1117">
   <title>Personal OTP Vault</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https:; base-uri 'none'; form-action 'none'">
   <link rel="icon" href="./favicon.ico" sizes="any">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="icon" href="./icons/favicon-32x32.png" sizes="32x32" type="image/png">
   <link rel="icon" href="./icons/favicon-16x16.png" sizes="16x16" type="image/png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -21,6 +19,22 @@
   <div class="halo halo-b" aria-hidden="true"></div>
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+
+  <div id="vault-stale-banner" class="vault-stale-banner hidden" role="status">
+    <span>Vault changed in another tab. This tab is read-only — reload to pick up the latest vault.</span>
+    <button type="button" id="vault-stale-reload" class="btn small">Reload</button>
+    <button type="button" id="vault-stale-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
+
+  <div id="backup-reminder-banner" class="data-banner hidden" role="status">
+    <span id="backup-reminder-text">No vault export in over 30 days — export a backup from the settings below.</span>
+    <button type="button" id="backup-reminder-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
+
+  <div id="drift-banner" class="data-banner warning hidden" role="alert">
+    <span>Device clock off by <span id="drift-skew"></span> — TOTP codes may be rejected. Fix your system clock.</span>
+    <button type="button" id="drift-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
 
   <main class="app-shell">
     <header class="hero-band">
@@ -60,6 +74,12 @@
       <form id="unlock-form" class="unlock-actions">
         <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
         <button type="submit" id="unlock-btn" class="btn primary">Unlock Vault</button>
+        <button type="button" id="biometric-unlock-btn" class="btn ghost hidden">Unlock with biometrics</button>
+        <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings helper-text"></p>
+        </div>
       </form>
       <p id="unlock-status" class="helper-text status-line" aria-live="polite"></p>
     </section>
@@ -98,6 +118,28 @@
                 </label>
 
                 <label>
+                  <span>Type</span>
+                  <select id="entry-type" name="entry-type">
+                    <option value="totp" selected>TOTP (timed)</option>
+                    <option value="hotp">HOTP (counter)</option>
+                  </select>
+                </label>
+
+                <label id="counter-field" class="hidden">
+                  <span>Counter</span>
+                  <input id="counter" name="counter" type="number" min="0" value="0" required>
+                </label>
+
+                <label>
+                  <span>Algorithm</span>
+                  <select id="algorithm" name="algorithm">
+                    <option value="SHA1" selected>SHA-1</option>
+                    <option value="SHA256">SHA-256</option>
+                    <option value="SHA512">SHA-512</option>
+                  </select>
+                </label>
+
+                <label>
                   <span>Digits</span>
                   <select id="digits" name="digits">
                     <option value="6" selected>6</option>
@@ -114,6 +156,7 @@
               <div class="actions actions-tight">
                 <button type="submit" class="btn primary">Save Entry</button>
                 <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
+                <button type="button" id="import-ga" class="btn ghost">Import Google Authenticator</button>
                 <button type="button" id="import-clipboard" class="btn ghost">Clipboard</button>
                 <button type="button" id="clear-all" class="btn danger">Clear All</button>
               </div>
@@ -189,6 +232,27 @@
                 <input id="clear-clipboard-toggle" type="checkbox">
                 <span>Clear clipboard 30 seconds after copy</span>
               </label>
+              <label>
+                <span>Auto-lock (encrypted vaults)</span>
+                <select id="auto-lock-select">
+                  <option value="5">After 5 minutes idle</option>
+                  <option value="15" selected>After 15 minutes idle</option>
+                  <option value="30">After 30 minutes idle</option>
+                  <option value="0">Off</option>
+                </select>
+              </label>
+              <label>
+                <span>Theme</span>
+                <select id="theme-select">
+                  <option value="system" selected>Match system</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </label>
+              <label class="toggle-row">
+                <input id="time-drift-toggle" type="checkbox">
+                <span>Check device clock against server time (needs network)</span>
+              </label>
             </div>
 
             <div id="encryption-fields" class="grid hidden">
@@ -200,9 +264,24 @@
                 <span>Confirm passphrase</span>
                 <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
               </label>
+              <div id="set-passphrase-strength" class="passphrase-strength">
+                <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+                <span class="strength-label"></span>
+                <p class="strength-warnings helper-text"></p>
+              </div>
             </div>
             <p id="passphrase-guidance" class="helper-text hidden">This vault is already encrypted. Use Change Passphrase to rotate your vault secret.</p>
 
+            <div id="biometric-settings" class="hidden">
+              <p class="eyebrow">biometric unlock</p>
+              <p id="biometric-status-line" class="helper-text"></p>
+              <div class="actions actions-tight">
+                <button type="button" id="enroll-biometric-btn" class="btn ghost hidden">Enable biometric unlock</button>
+                <button type="button" id="disenroll-biometric-btn" class="btn ghost hidden">Disable biometric unlock</button>
+              </div>
+            </div>
+
+            <p id="last-export-line" class="helper-text"></p>
 
             <div class="actions actions-tight">
               <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
@@ -211,6 +290,7 @@
                 <input id="import-backup" type="file" accept="application/json">
               </label>
               <button type="button" id="change-passphrase-btn" class="btn ghost hidden">Change Passphrase</button>
+              <button type="button" id="check-drift-btn" class="btn ghost">Check clock now</button>
               <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
             </div>
 
@@ -322,10 +402,17 @@
         <p class="entry-code">------</p>
         <div class="entry-countdown">
           <span class="entry-seconds"></span>
+          <span class="entry-algo hidden"></span>
+          <span class="entry-counter hidden"></span>
           <div class="entry-track"><div class="entry-bar"></div></div>
+          <svg class="entry-ring" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="ring-track" cx="18" cy="18" r="16"></circle>
+            <circle class="ring-progress" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"></circle>
+          </svg>
         </div>
       </div>
       <div class="entry-actions">
+        <button type="button" class="drag-handle" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
         <button type="button" class="btn small edit">Edit</button>
         <button type="button" class="btn small move-up">Up</button>
         <button type="button" class="btn small move-down">Down</button>
@@ -403,6 +490,18 @@
         <span>Secret</span>
         <input id="edit-secret" type="text" placeholder="JBSWY3DPEHPK3PXP">
       </label>
+      <label id="edit-counter-field" class="hidden">
+        <span>HOTP counter</span>
+        <input id="edit-counter" type="number" min="0" value="0">
+      </label>
+      <label>
+        <span>Algorithm</span>
+        <select id="edit-algorithm">
+          <option value="SHA1">SHA-1</option>
+          <option value="SHA256">SHA-256</option>
+          <option value="SHA512">SHA-512</option>
+        </select>
+      </label>
       <label>
         <span>Tags</span>
         <input id="edit-tags" type="text" placeholder="work, infra">
@@ -464,7 +563,6 @@
     </form>
   </dialog>
 
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
   <script type="module" src="./app.bundle.js"></script>
 </body>
 </html>

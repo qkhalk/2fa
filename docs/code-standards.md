@@ -34,12 +34,14 @@ Last updated: 2026-06-27
 
 ## Lib/ Module Rules
 
-The `lib/` directory contains domain logic shared between the root app and extension. These modules must remain:
+The `lib/` directory contains domain logic shared between the root app and extension: `otp.js` (TOTP/HOTP engine + parsing + reorder math), `vault.js` (KDF envelope, DEK two-envelope mode, backups), `migration.js` (Google Authenticator otpauth-migration), `biometric.js` (WebAuthn PRF ceremonies + KEK/DEK wrapping), and `i18n.js` (string catalog framework). These modules must remain:
 
 ### Browser and Extension Agnostic
 - **No DOM dependencies**: Cannot rely on browser-specific APIs that differ between contexts
 - **No direct storage access**: Must accept storage backend as parameter or use abstracted interface
 - **Web Crypto only**: Use Web Crypto API, not Node.js crypto modules
+- **Parameterized APIs**: Crypto and ceremony modules take `cryptoApi`/`credentialsApi` parameters (defaulting to the globals) so Node tests can inject them
+- **Dependency exception**: `jsqr` is the sole runtime-bundled npm dependency (QR decoding); it is bundled by esbuild — no CDN or third-party origin is acceptable
 - **No extension-specific APIs**: Avoid `chrome.*` APIs directly
 
 ### Export Conventions

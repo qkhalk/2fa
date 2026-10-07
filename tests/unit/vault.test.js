@@ -1,12 +1,48 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessPassphraseStrength,
   createEncryptedBackup,
   createPlainBackup,
   decryptVaultEntries,
+  decryptVaultEntriesWithKey,
   encryptEntries,
+  encryptEntriesWithDek,
+  generateVaultDek,
+  isDekEncryptedPayload,
+  isLegacyEncryptedPayload,
+  KDF_PARAMS_DEFAULT,
   parseBackupFile,
+  shouldWarnBackup,
+  unwrapDekWithPassphrase,
+  wrapDekWithPassphrase,
 } from "../../lib/vault.js";
+
+const encoder = new TextEncoder();
+
+function toBase64String(uint8) {
+  return btoa(String.fromCharCode(...uint8));
+}
+
+// Builds a pre-0.1.2 {salt, iv, data} envelope at the legacy 150k work factor.
+async function encryptWithLegacyParams(entries, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey("raw", encoder.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(JSON.stringify(entries)));
+  return {
+    salt: toBase64String(salt),
+    iv: toBase64String(iv),
+    data: toBase64String(new Uint8Array(encrypted)),
+  };
+}
 
 describe("vault helpers", () => {
   const entries = [
@@ -43,6 +79,167 @@ describe("vault helpers", () => {
     await expect(decryptVaultEntries(payload, "wrong passphrase")).rejects.toThrow(
       "Incorrect passphrase or unreadable encrypted data"
     );
+  });
+
+  it("writes kdf params into new envelopes at the 600k default", async () => {
+    const payload = await encryptEntries(entries, "correct horse battery");
+
+    expect(payload.kdf).toEqual({ ...KDF_PARAMS_DEFAULT });
+    expect(payload.kdf.iterations).toBe(600000);
+  });
+
+  it("decrypts legacy {salt, iv, data} envelopes at the 150k work factor", async () => {
+    const legacyPayload = await encryptWithLegacyParams(entries, "correct horse battery");
+
+    expect(legacyPayload.kdf).toBeUndefined();
+    const decrypted = await decryptVaultEntries(legacyPayload, "correct horse battery");
+
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+    expect(isLegacyEncryptedPayload(legacyPayload)).toBe(true);
+  });
+
+  it("treats a sub-floor kdf as legacy instead of honoring it", async () => {
+    const legacyPayload = await encryptWithLegacyParams(entries, "correct horse battery");
+    const tampered = { ...legacyPayload, kdf: { algorithm: "PBKDF2", iterations: 1000, hash: "SHA-256", saltBytes: 16 } };
+
+    expect(isLegacyEncryptedPayload(tampered)).toBe(true);
+    // Decrypting via the legacy work factor succeeds — proof the tampered
+    // 1000-iteration value was never used for derivation.
+    const decrypted = await decryptVaultEntries(tampered, "correct horse battery");
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects malformed kdf blocks with VAULT_FIELDS", async () => {
+    const base = await encryptEntries(entries, "correct horse battery");
+    const malformedCases = [
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: -1, hash: "SHA-256" } },
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: "600000", hash: "SHA-256" } },
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: 600000, hash: "MD5" } },
+      { ...base, kdf: { algorithm: "ARGON2", iterations: 600000, hash: "SHA-256" } },
+      { ...base, kdf: "600000" },
+    ];
+
+    for (const payload of malformedCases) {
+      await expect(decryptVaultEntries(payload, "correct horse battery")).rejects.toMatchObject({
+        code: "VAULT_FIELDS",
+      });
+    }
+  });
+
+  it("flags isLegacyEncryptedPayload for missing and sub-floor kdf only", async () => {
+    expect(isLegacyEncryptedPayload(null)).toBe(false);
+    expect(isLegacyEncryptedPayload({ salt: "a", iv: "b", data: "c" })).toBe(true);
+    expect(isLegacyEncryptedPayload({ salt: "a", iv: "b", data: "c", kdf: { iterations: 149999 } })).toBe(true);
+    const payload = await encryptEntries(entries, "correct horse battery");
+    expect(isLegacyEncryptedPayload(payload)).toBe(false);
+  });
+
+  it("scores passphrase strength across the advisory scale", () => {    expect(assessPassphraseStrength("")).toEqual({ score: 0, label: "Very weak", warnings: ["Enter a passphrase"] });
+    expect(assessPassphraseStrength("short").score).toBeLessThanOrEqual(1);
+
+    const weak = assessPassphraseStrength("password123");
+    expect(weak.score).toBeLessThanOrEqual(1);
+    expect(weak.warnings).toContain("Avoid common words and patterns");
+
+    const fair = assessPassphraseStrength("qwertyuiop"); // 10 chars, one class, common pattern
+    expect(fair.score).toBeLessThanOrEqual(1);
+
+    const good = assessPassphraseStrength("CorrectHorse42"); // 14 chars, 3 classes
+    expect(good.score).toBe(3);
+    expect(good.label).toBe("Good");
+
+    const strong = assessPassphraseStrength("Correct-Horse-Battery-42!");
+    expect(strong.score).toBe(4);
+    expect(strong.label).toBe("Strong");
+    expect(strong.warnings).toEqual([]);
+  });
+
+  it("warns about backups on the 30-day rule", () => {
+    const now = 1_700_000_000_000;
+    const day = 24 * 60 * 60 * 1000;
+
+    expect(shouldWarnBackup({}, 0, now)).toBe(false);
+    expect(shouldWarnBackup({}, 3, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now - 31 * day }, 3, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now - 29 * day }, 3, now)).toBe(false);
+    expect(shouldWarnBackup({ lastBackupAt: now - 30 * day - 1 }, 1, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now }, 1, now)).toBe(false);
+  });
+
+  it("round-trips a DEK-mode envelope through the passphrase recovery path", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+
+    const dekBlock = await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT);
+    const payload = await encryptEntriesWithDek(entries, dek, {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: dekBlock,
+    });
+
+    expect(isDekEncryptedPayload(payload)).toBe(true);
+    expect(payload.kdf.mode).toBe("dek-v1");
+
+    // Standard passphrase decrypt consumer (unlock / backup import) works.
+    const decrypted = await decryptVaultEntries(payload, passphrase);
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+
+    // Wrong passphrase fails closed.
+    await expect(decryptVaultEntries(payload, "wrong passphrase")).rejects.toThrow(
+      "Incorrect passphrase or unreadable encrypted data"
+    );
+
+    // Direct DEK decrypt (biometric unlock path) matches.
+    const unwrappedDek = await unwrapDekWithPassphrase(payload, passphrase);
+    const viaDek = await decryptVaultEntriesWithKey(unwrappedDek, payload);
+    expect(viaDek).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("keeps data stable across DEK-mode saves while rotating the data iv", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+    const meta = {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT),
+    };
+
+    const first = await encryptEntriesWithDek(entries, dek, meta);
+    const second = await encryptEntriesWithDek(entries, dek, {
+      ...meta,
+      dek: await wrapDekWithPassphrase(dek, "a brand new passphrase", salt, KDF_PARAMS_DEFAULT),
+    });
+
+    expect(second.salt).toBe(first.salt);
+    expect(second.kdf).toEqual(first.kdf);
+    expect(second.iv).not.toBe(first.iv);
+    // Same DEK decrypts both saves despite the passphrase wrap change.
+    expect(isDekEncryptedPayload(second)).toBe(true);
+    const decrypted = await decryptVaultEntries(second, "a brand new passphrase");
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects a tampered DEK wrap and malformed dek blocks", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+    const dekBlock = await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT);
+    const payload = await encryptEntriesWithDek(entries, dek, {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: dekBlock,
+    });
+
+    const tampered = { ...payload, dek: { ...dekBlock, wrapped: btoa("garbage") } };
+    await expect(decryptVaultEntries(tampered, passphrase)).rejects.toThrow(
+      "Incorrect passphrase or unreadable encrypted data"
+    );
+
+    await expect(decryptVaultEntries({ ...payload, dek: { wrapped: 5, iv: "x" } }, passphrase)).rejects.toMatchObject({
+      code: "VAULT_FIELDS",
+    });
   });
 
   it("parses plain backups", async () => {
@@ -122,16 +319,22 @@ describe("vault helpers", () => {
     expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
   });
 
-  it("rejects plain backups with entries missing required id", async () => {
+  it("fills a generated id for plain backups with entries missing id", async () => {
     const backup = await createPlainBackup([omitEntryField("id")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].id).toBeTruthy();
   });
 
-  it("rejects plain backups with entries missing required label", async () => {
+  it("fills a fallback label for plain backups with entries missing label", async () => {
     const backup = await createPlainBackup([omitEntryField("label")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].label).toContain("Secret");
   });
 
   it("rejects plain backups with entries missing required secret", async () => {
@@ -164,20 +367,62 @@ describe("vault helpers", () => {
     await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
   });
 
-  it("rejects plain backups with entries missing required createdAt", async () => {
+  it("fills the current time for plain backups with entries missing createdAt", async () => {
     const backup = await createPlainBackup([omitEntryField("createdAt")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(typeof parsed.entries[0].createdAt).toBe("number");
   });
 
-  it("rejects plain backups with entries missing required digits", async () => {
+  it("fills default digits for plain backups with entries missing digits", async () => {
     const backup = await createPlainBackup([omitEntryField("digits")]);
+    const parsed = await parseBackupFile(backup);
 
-    await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].digits).toBe(6);
   });
 
-  it("rejects plain backups with entries missing required period", async () => {
+  it("fills default period for plain backups with entries missing period", async () => {
     const backup = await createPlainBackup([omitEntryField("period")]);
+    const parsed = await parseBackupFile(backup);
+
+    expect(parsed.invalidItemCount).toBe(0);
+    expect(parsed.entries).toHaveLength(1);
+    expect(parsed.entries[0].period).toBe(30);
+  });
+
+  it("skips invalid entries in mixed plain backups and reports invalidItemCount", async () => {
+    const backup = await createPlainBackup([entries[0], withEntryField("secret", "BAD*")]);
+    const parsed = await parseBackupFile(backup);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.itemCount).toBe(2);
+    expect(parsed.invalidItemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("skips invalid entries in legacy v1 mixed backups and reports invalidItemCount", async () => {
+    const legacyMixedBackup = {
+      version: 1,
+      encrypted: false,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      entries: [entries[0], withEntryField("secret", "BAD*")],
+    };
+
+    const parsed = await parseBackupFile(legacyMixedBackup);
+
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.integrity).toBe("legacy");
+    expect(parsed.itemCount).toBe(2);
+    expect(parsed.invalidItemCount).toBe(1);
+    expect(parsed.entries).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects plain backups where every entry is invalid", async () => {
+    const backup = await createPlainBackup([withEntryField("secret", "BAD*")]);
 
     await expect(parseBackupFile(backup)).rejects.toThrow("Backup contains invalid entries");
   });

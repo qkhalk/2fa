@@ -10,6 +10,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Fail fast instead of hanging for hours on a stuck runner/mirror.
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +24,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # azure.archive.ubuntu.com intermittently stalls mid-update; retry once
+      # and cap fetch timeouts so a bad mirror fails fast instead of hanging.
       - name: Install ImageMagick
-        run: sudo apt-get update && sudo apt-get install -y imagemagick
+        run: |
+          sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+            || sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30
+          sudo apt-get install -y -o Acquire::Retries=5 imagemagick
 
       - name: Verify version sync
         run: npm run verify:version

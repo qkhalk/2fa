@@ -7,6 +7,10 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <div id="drift-banner" class="drift-banner hidden" role="alert">
+    <span>Device clock off by <span id="drift-skew"></span> — TOTP codes may be rejected.</span>
+    <button id="drift-dismiss" class="ghost-btn" type="button">Dismiss</button>
+  </div>
   <main class="popup-shell">
     <header class="hero">
       <div>
@@ -31,6 +35,18 @@
         <input id="secret" type="text" placeholder="Base32 secret" required>
         <input id="tags" type="text" placeholder="Tags: work, infra">
         <div class="row two-up">
+          <select id="entry-type">
+            <option value="totp" selected>TOTP (timed)</option>
+            <option value="hotp">HOTP (counter)</option>
+          </select>
+          <select id="algorithm">
+            <option value="SHA1" selected>SHA-1</option>
+            <option value="SHA256">SHA-256</option>
+            <option value="SHA512">SHA-512</option>
+          </select>
+        </div>
+        <div class="row two-up">
+          <input id="counter" type="number" min="0" value="0" class="hidden">
           <select id="digits">
             <option value="6">6 digits</option>
             <option value="8">8 digits</option>
@@ -43,6 +59,7 @@
             <input id="qr-file" type="file" accept="image/*">
           </label>
           <button id="paste-uri" class="ghost-btn" type="button">Paste URI</button>
+          <button id="paste-ga" class="ghost-btn" type="button">Paste GA Export</button>
         </div>
         <button type="submit" class="primary-btn">Add Entry</button>
       </form>
@@ -69,6 +86,12 @@
       <form id="unlock-form">
         <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
         <button id="unlock-btn" class="primary-btn" type="submit">Unlock</button>
+        <button id="biometric-unlock-btn" class="ghost-btn hidden" type="button">Unlock with biometrics</button>
+        <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings status"></p>
+        </div>
         <p id="unlock-status" class="status" aria-live="polite"></p>
       </form>
     </section>
@@ -82,12 +105,49 @@
         <input id="encrypt-toggle" type="checkbox">
         <span>Encrypt entries in extension storage</span>
       </label>
+      <label>
+        <span>Auto-lock</span>
+        <select id="auto-lock-select">
+          <option value="5">After 5 minutes idle</option>
+          <option value="15" selected>After 15 minutes idle</option>
+          <option value="30">After 30 minutes idle</option>
+          <option value="0">Off</option>
+        </select>
+      </label>
+      <label>
+        <span>Theme</span>
+        <select id="theme-select">
+          <option value="system" selected>Match system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <label class="toggle-row">
+        <input id="time-drift-toggle" type="checkbox">
+        <span>Check device clock against server time (needs network)</span>
+      </label>
+      <button id="check-drift-btn" class="ghost-btn" type="button">Check clock now</button>
+      <p class="status">Closing this popup always locks the vault immediately.</p>
       <div id="passphrase-fields" class="hidden">
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
+        <div id="set-passphrase-strength" class="passphrase-strength">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings status"></p>
+        </div>
       </div>
       <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
+      <div id="biometric-settings" class="hidden">
+        <p id="biometric-status-line" class="status"></p>
+        <div class="security-actions">
+          <button id="enroll-biometric-btn" class="ghost-btn hidden" type="button">Enable biometric unlock</button>
+          <button id="disenroll-biometric-btn" class="ghost-btn hidden" type="button">Disable biometric unlock</button>
+        </div>
+      </div>
+      <p id="last-export-line" class="status"></p>
       <div class="security-actions">
+        <button id="export-backup" class="ghost-btn" type="button">Export Backup</button>
         <button id="change-passphrase-btn" class="ghost-btn hidden" type="button">Change Passphrase</button>
         <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
       </div>
@@ -115,6 +175,7 @@
   <template id="entry-template">
     <article class="entry-card">
       <div class="entry-top">
+        <button class="drag-handle" type="button" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
         <div class="avatar"></div>
         <div class="identity">
           <h3 class="issuer"></h3>
@@ -134,9 +195,15 @@
 
       <div class="entry-bottom">
         <span class="meta"></span>
+        <span class="algo hidden"></span>
+        <span class="counter hidden"></span>
         <div class="mini-timer">
           <span class="seconds"></span>
           <div class="timer-track"><div class="bar"></div></div>
+          <svg class="entry-ring" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="ring-track" cx="18" cy="18" r="16"></circle>
+            <circle class="ring-progress" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"></circle>
+          </svg>
         </div>
       </div>
     </article>
@@ -153,11 +220,19 @@
     <input id="edit-label" type="text" placeholder="Label">
     <input id="edit-secret" type="text" placeholder="Base32 secret">
     <input id="edit-tags" type="text" placeholder="Tags">
+    <input id="edit-counter" type="number" min="0" value="0" class="hidden" placeholder="HOTP counter">
     <div class="row two-up">
+      <select id="edit-algorithm">
+        <option value="SHA1">SHA-1</option>
+        <option value="SHA256">SHA-256</option>
+        <option value="SHA512">SHA-512</option>
+      </select>
       <select id="edit-digits">
         <option value="6">6 digits</option>
         <option value="8">8 digits</option>
       </select>
+    </div>
+    <div class="row two-up">
       <input id="edit-period" type="number" min="15" max="120">
     </div>
     <p id="edit-status" class="status" aria-live="polite"></p>
@@ -177,6 +252,20 @@
       <div class="row two-up">
         <button id="cancel-remove" class="ghost-btn" value="cancel" type="submit">Cancel</button>
         <button id="confirm-remove" class="primary-btn" value="accept" type="submit">Remove</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="migration-preview-dialog" class="panel hidden-dialog">
+    <form id="migration-preview-form">
+      <div class="section-head">
+        <h2>Import Google Authenticator</h2>
+      </div>
+      <p id="migration-preview-status" class="status"></p>
+      <div id="migration-preview-list"></div>
+      <div class="row two-up">
+        <button id="migration-cancel" class="ghost-btn" value="cancel" type="submit">Cancel</button>
+        <button id="migration-import" class="primary-btn" value="accept" type="submit">Import</button>
       </div>
     </form>
   </dialog>

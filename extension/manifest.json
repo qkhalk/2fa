@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Personal OTP Vault",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Popup-based TOTP manager for personal use.",
   "background": {
     "service_worker": "background.js"
@@ -22,6 +22,10 @@
   },
   "permissions": [
     "storage",
+    "alarms",
+    "idle"
+  ],
+  "optional_permissions": [
     "clipboardRead"
   ]
 }

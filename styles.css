@@ -1,3 +1,26 @@
+/* Vendored fonts (no third-party origins; see CSP in index.html) */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./fonts/space-grotesk-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+}
+
 :root {
   --bg: #090b10;
   --surface: rgba(16, 19, 27, 0.9);
@@ -13,6 +36,39 @@
   --danger: #ff7e7e;
   --warning: #ffd978;
   --shadow: 0 28px 60px rgba(0, 0, 0, 0.38);
+  --bg-grad-from: #0c0f16;
+  --bg-grad-to: #07080c;
+  --bg-glow-orange: rgba(255, 111, 60, 0.18);
+  --bg-glow-blue: rgba(108, 145, 255, 0.18);
+  --halo-a: rgba(255, 111, 60, 0.55);
+  --halo-b: rgba(81, 111, 255, 0.36);
+  --veil: rgba(12, 15, 23, 0.96);
+  --panel-grad-from: rgba(14, 16, 23, 0.94);
+  --panel-grad-to: rgba(10, 12, 17, 0.94);
+  --workspace-grad-from: rgba(17, 19, 28, 0.9);
+  --workspace-grad-to: rgba(11, 13, 18, 0.9);
+  --card-grad-from: rgba(18, 21, 29, 0.9);
+  --card-grad-to: rgba(10, 12, 18, 0.98);
+  --chip-bg: rgba(8, 10, 15, 0.88);
+  --avatar-bg: rgba(8, 10, 15, 0.96);
+  --dialog-bg: rgba(12, 15, 22, 0.98);
+  --scrim: rgba(0, 0, 0, 0.62);
+  --scrim-soft: rgba(0, 0, 0, 0.4);
+  --on-accent: #1a0e07;
+  --danger-text: #ffd6d6;
+  --danger-text-soft: #ffd3d3;
+  --success-text: #c6ffe0;
+  --warning-text: #ffe79a;
+  --initials-text: #fff3ea;
+  --white-2: var(--white-2);
+  --white-3: rgba(255, 255, 255, 0.03);
+  --white-5: rgba(255, 255, 255, 0.05);
+  --white-6: rgba(255, 255, 255, 0.06);
+  --white-8: rgba(255, 255, 255, 0.08);
+  --white-12: rgba(255, 255, 255, 0.12);
+  --white-16: rgba(255, 255, 255, 0.16);
+  --screenshot-glow: rgba(244, 241, 235, 0.6);
+  --focus-ring: rgba(255, 111, 60, 0.45);
 }
 
 * {
@@ -29,9 +85,9 @@ body {
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at 18% 14%, rgba(255, 111, 60, 0.18), transparent 28%),
-    radial-gradient(circle at 100% 0%, rgba(108, 145, 255, 0.18), transparent 32%),
-    linear-gradient(180deg, #0c0f16 0%, #07080c 100%);
+    radial-gradient(circle at 18% 14%, var(--bg-glow-orange), transparent 28%),
+    radial-gradient(circle at 100% 0%, var(--bg-glow-blue), transparent 32%),
+    linear-gradient(180deg, var(--bg-grad-from) 0%, var(--bg-grad-to) 100%);
   overflow-x: hidden;
 }
 
@@ -47,7 +103,7 @@ body.blur-codes .entry.revealed .entry-code {
 
 body.screenshot-safe .entry-code {
   color: transparent;
-  text-shadow: 0 0 8px rgba(244, 241, 235, 0.6);
+  text-shadow: 0 0 8px var(--screenshot-glow);
 }
 
 body.screenshot-safe .entry.revealed .entry-code,
@@ -67,7 +123,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid rgba(255, 111, 60, 0.45);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -89,7 +145,7 @@ textarea:focus-visible {
   height: 320px;
   top: -100px;
   right: -50px;
-  background: rgba(255, 111, 60, 0.55);
+  background: var(--halo-a);
 }
 
 .halo-b {
@@ -97,7 +153,7 @@ textarea:focus-visible {
   height: 260px;
   bottom: -90px;
   left: -60px;
-  background: rgba(81, 111, 255, 0.36);
+  background: var(--halo-b);
 }
 
 .toast-region {
@@ -113,7 +169,7 @@ textarea:focus-visible {
 .toast {
   padding: 12px 14px;
   border-radius: 16px;
-  background: rgba(12, 15, 23, 0.96);
+  background: var(--veil);
   border: 1px solid var(--line-strong);
   box-shadow: var(--shadow);
   animation: toast-in 180ms ease-out;
@@ -155,7 +211,7 @@ textarea:focus-visible {
 .workspace-main,
 .inspector-rail {
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(14, 16, 23, 0.94), rgba(10, 12, 17, 0.94));
+  background: linear-gradient(180deg, var(--panel-grad-from), var(--panel-grad-to));
   box-shadow: var(--shadow);
 }
 
@@ -257,7 +313,7 @@ h3 {
 
 .btn.primary {
   background: linear-gradient(135deg, var(--accent), #ffa36a);
-  color: #1a0e07;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -271,7 +327,7 @@ h3 {
 .btn.danger {
   background: rgba(255, 126, 126, 0.12);
   border-color: rgba(255, 126, 126, 0.35);
-  color: #ffd6d6;
+  color: var(--danger-text);
 }
 
 .btn.small {
@@ -282,7 +338,7 @@ h3 {
 .btn.small.destructive {
   margin-left: auto;
   border-color: rgba(255, 126, 126, 0.4);
-  color: #ffd6d6;
+  color: var(--danger-text);
 }
 
 .btn.small.destructive:hover {
@@ -304,10 +360,10 @@ h3 {
   border-radius: 28px;
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, var(--white-2), transparent),
     radial-gradient(circle at center, rgba(255, 111, 60, 0.12), transparent 48%),
-    rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+    var(--white-2);
+  border: 1px solid var(--white-6);
 }
 
 .signal-line,
@@ -315,7 +371,7 @@ h3 {
   position: absolute;
   inset: auto 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  background: linear-gradient(90deg, transparent, var(--white-6), transparent);
 }
 
 .signal-line {
@@ -329,7 +385,7 @@ h3 {
 .signal-ring {
   position: absolute;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--white-8);
 }
 
 .signal-ring-a {
@@ -353,7 +409,7 @@ h3 {
   gap: 5px;
   background:
     radial-gradient(circle at 30% 30%, rgba(255, 163, 106, 0.56), transparent 28%),
-    radial-gradient(circle at center, rgba(255, 111, 60, 0.34), rgba(8, 10, 15, 0.96));
+    radial-gradient(circle at center, rgba(255, 111, 60, 0.34), var(--avatar-bg));
   border: 1px solid rgba(255, 111, 60, 0.34);
   box-shadow: 0 0 0 16px rgba(255, 111, 60, 0.05);
 }
@@ -362,7 +418,7 @@ h3 {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.8rem;
   letter-spacing: 0.22em;
-  color: #fff3ea;
+  color: var(--initials-text);
 }
 
 .vault-lock {
@@ -417,7 +473,7 @@ h3 {
 
 .rail-section + .rail-section {
   padding-top: 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--white-8);
 }
 
 .rail-head {
@@ -431,7 +487,7 @@ h3 {
   padding: 18px;
   background:
     linear-gradient(160deg, rgba(255, 111, 60, 0.12), transparent 55%),
-    linear-gradient(180deg, rgba(17, 19, 28, 0.9), rgba(11, 13, 18, 0.9));
+    linear-gradient(180deg, var(--workspace-grad-from), var(--workspace-grad-to));
 }
 
 .onboarding-steps {
@@ -465,7 +521,7 @@ textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: rgba(8, 10, 15, 0.88);
+  background: var(--chip-bg);
   color: var(--text);
   padding: 12px 14px;
 }
@@ -531,15 +587,15 @@ textarea {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--white-12);
   padding: 8px 12px;
   font-size: 0.78rem;
   color: var(--accent-soft);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--white-3);
 }
 
 .workspace-chip.offline {
-  color: #ffe79a;
+  color: var(--warning-text);
   border-color: rgba(255, 217, 120, 0.26);
 }
 
@@ -550,10 +606,10 @@ textarea {
 }
 
 .summary-card {
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--white-8);
   border-radius: 18px;
   padding: 14px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--white-3);
   display: grid;
   gap: 8px;
 }
@@ -596,8 +652,8 @@ textarea {
   height: 9px;
   border-radius: 999px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--white-5);
+  border: 1px solid var(--white-8);
 }
 
 #timer-bar,
@@ -641,7 +697,7 @@ textarea {
   padding: 16px;
   border-radius: 24px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(18, 21, 29, 0.9), rgba(10, 12, 18, 0.98));
+  background: linear-gradient(180deg, var(--card-grad-from), var(--card-grad-to));
   transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
   align-items: start;
 }
@@ -681,7 +737,7 @@ textarea {
 
 .entry:hover {
   transform: translateY(-1px);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--white-16);
 }
 
 .entry.pinned {
@@ -744,8 +800,8 @@ textarea {
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 0.74rem;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--white-5);
+  border: 1px solid var(--white-8);
   color: var(--accent-soft);
 }
 
@@ -753,7 +809,7 @@ textarea {
   grid-column: 2 / 4;
   padding-top: 10px;
   margin-top: 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--white-8);
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-start;
@@ -815,11 +871,11 @@ textarea {
   width: min(680px, calc(100vw - 24px));
   padding: 0;
   color: var(--text);
-  background: rgba(12, 15, 22, 0.98);
+  background: var(--dialog-bg);
 }
 
 .dialog-shell::backdrop {
-  background: rgba(0, 0, 0, 0.62);
+  background: var(--scrim);
   backdrop-filter: blur(6px);
 }
 
@@ -839,19 +895,19 @@ textarea {
   padding: 12px 14px;
   border-radius: 18px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--white-3);
 }
 
 .status-line.error {
-  color: #ffd3d3;
+  color: var(--danger-text-soft);
 }
 
 .status-line.success {
-  color: #c6ffe0;
+  color: var(--success-text);
 }
 
 .status-line.warning {
-  color: #ffe79a;
+  color: var(--warning-text);
 }
 
 #camera-preview {
@@ -859,7 +915,7 @@ textarea {
   aspect-ratio: 16 / 10;
   margin-top: 14px;
   border-radius: 20px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--scrim-soft);
   border: 1px solid var(--line);
   object-fit: cover;
 }
@@ -1006,4 +1062,278 @@ textarea {
   .entry-actions {
     justify-content: start;
   }
+}
+
+/* Phase 1: passphrase strength meter */
+.passphrase-strength {
+  display: grid;
+  gap: 0.35rem;
+}
+.passphrase-strength .strength-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.passphrase-strength .strength-fill {
+  height: 100%;
+  width: 20%;
+  border-radius: 999px;
+  background: var(--danger);
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.passphrase-strength .strength-fill[data-score="1"] {
+  width: 35%;
+  background: var(--danger);
+}
+.passphrase-strength .strength-fill[data-score="2"] {
+  width: 55%;
+  background: var(--warning);
+}
+.passphrase-strength .strength-fill[data-score="3"] {
+  width: 78%;
+  background: var(--warning);
+}
+.passphrase-strength .strength-fill[data-score="4"] {
+  width: 100%;
+  background: linear-gradient(90deg, var(--accent), #ffcf92);
+}
+.passphrase-strength .strength-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.passphrase-strength .strength-warnings {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* Phase 1: multi-tab stale vault banner */
+.vault-stale-banner {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--warning);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.vault-stale-banner.hidden {
+  display: none;
+}
+
+/* Phase 3: algorithm and HOTP counter badges */
+.entry-algo,
+.entry-counter {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  color: var(--accent-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
+.entry-algo.hidden,
+.entry-counter.hidden {
+  display: none;
+}
+
+/* Phase 5: data-safety banners + undo toast */
+.data-banner {
+  position: fixed;
+  top: 4rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: min(92vw, 640px);
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 0.9rem;
+}
+.data-banner.warning {
+  border-color: var(--warning);
+  border-left-color: var(--warning);
+  color: var(--warning);
+}
+.data-banner.hidden {
+  display: none;
+}
+.toast.undo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-width: 280px;
+}
+
+/* --- Light theme: explicit toggle and system-follow (Phase 7) ---
+   The :root values above are the dark theme (the app's original look), so the
+   default experience is byte-identical to pre-token styles. Light values are
+   declared twice: once for the explicit Light choice, once for System users
+   whose OS prefers light (explicit Dark always wins over the media query). */
+:root[data-theme="light"] {
+  --bg: #f4f2ee;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-alt: rgba(244, 241, 235, 0.9);
+  --surface-strong: rgba(255, 255, 255, 0.98);
+  --text: #26221c;
+  --muted: #6d675e;
+  --line: rgba(38, 34, 28, 0.12);
+  --line-strong: rgba(38, 34, 28, 0.2);
+  --accent: #d9541c;
+  --accent-soft: #b54512;
+  --success: #1d7a4d;
+  --danger: #c33c3c;
+  --warning: #9a6c0a;
+  --shadow: 0 24px 50px rgba(46, 38, 26, 0.16);
+  --bg-grad-from: #f8f6f2;
+  --bg-grad-to: #ebe9e2;
+  --bg-glow-orange: rgba(255, 111, 60, 0.16);
+  --bg-glow-blue: rgba(108, 145, 255, 0.14);
+  --halo-a: rgba(255, 111, 60, 0.3);
+  --halo-b: rgba(108, 145, 255, 0.22);
+  --veil: rgba(248, 246, 242, 0.97);
+  --panel-grad-from: rgba(255, 255, 255, 0.96);
+  --panel-grad-to: rgba(250, 248, 244, 0.96);
+  --workspace-grad-from: rgba(255, 255, 255, 0.94);
+  --workspace-grad-to: rgba(250, 248, 244, 0.94);
+  --card-grad-from: rgba(255, 255, 255, 0.95);
+  --card-grad-to: rgba(251, 249, 244, 0.98);
+  --chip-bg: rgba(255, 255, 255, 0.9);
+  --avatar-bg: rgba(255, 255, 255, 0.95);
+  --dialog-bg: rgba(252, 251, 248, 0.99);
+  --scrim: rgba(46, 38, 26, 0.45);
+  --scrim-soft: rgba(46, 38, 26, 0.28);
+  --on-accent: #fff6f0;
+  --danger-text: #a02f2f;
+  --danger-text-soft: #a02f2f;
+  --success-text: #17603c;
+  --warning-text: #7a5508;
+  --initials-text: #5a2b14;
+  --white-2: rgba(38, 34, 28, 0.03);
+  --white-3: rgba(38, 34, 28, 0.04);
+  --white-5: rgba(38, 34, 28, 0.06);
+  --white-6: rgba(38, 34, 28, 0.08);
+  --white-8: rgba(38, 34, 28, 0.1);
+  --white-12: rgba(38, 34, 28, 0.16);
+  --white-16: rgba(38, 34, 28, 0.22);
+  --screenshot-glow: rgba(38, 34, 28, 0.5);
+  --focus-ring: rgba(217, 84, 28, 0.5);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f2ee;
+    --surface: rgba(255, 255, 255, 0.92);
+    --surface-alt: rgba(244, 241, 235, 0.9);
+    --surface-strong: rgba(255, 255, 255, 0.98);
+    --text: #26221c;
+    --muted: #6d675e;
+    --line: rgba(38, 34, 28, 0.12);
+    --line-strong: rgba(38, 34, 28, 0.2);
+    --accent: #d9541c;
+    --accent-soft: #b54512;
+    --success: #1d7a4d;
+    --danger: #c33c3c;
+    --warning: #9a6c0a;
+    --shadow: 0 24px 50px rgba(46, 38, 26, 0.16);
+    --bg-grad-from: #f8f6f2;
+    --bg-grad-to: #ebe9e2;
+    --bg-glow-orange: rgba(255, 111, 60, 0.16);
+    --bg-glow-blue: rgba(108, 145, 255, 0.14);
+    --halo-a: rgba(255, 111, 60, 0.3);
+    --halo-b: rgba(108, 145, 255, 0.22);
+    --veil: rgba(248, 246, 242, 0.97);
+    --panel-grad-from: rgba(255, 255, 255, 0.96);
+    --panel-grad-to: rgba(250, 248, 244, 0.96);
+    --workspace-grad-from: rgba(255, 255, 255, 0.94);
+    --workspace-grad-to: rgba(250, 248, 244, 0.94);
+    --card-grad-from: rgba(255, 255, 255, 0.95);
+    --card-grad-to: rgba(251, 249, 244, 0.98);
+    --chip-bg: rgba(255, 255, 255, 0.9);
+    --avatar-bg: rgba(255, 255, 255, 0.95);
+    --dialog-bg: rgba(252, 251, 248, 0.99);
+    --scrim: rgba(46, 38, 26, 0.45);
+    --scrim-soft: rgba(46, 38, 26, 0.28);
+    --on-accent: #fff6f0;
+    --danger-text: #a02f2f;
+    --danger-text-soft: #a02f2f;
+    --success-text: #17603c;
+    --warning-text: #7a5508;
+    --initials-text: #5a2b14;
+    --white-2: rgba(38, 34, 28, 0.03);
+    --white-3: rgba(38, 34, 28, 0.04);
+    --white-5: rgba(38, 34, 28, 0.06);
+    --white-6: rgba(38, 34, 28, 0.08);
+    --white-8: rgba(38, 34, 28, 0.1);
+    --white-12: rgba(38, 34, 28, 0.16);
+    --white-16: rgba(38, 34, 28, 0.22);
+    --screenshot-glow: rgba(38, 34, 28, 0.5);
+    --focus-ring: rgba(217, 84, 28, 0.5);
+  }
+}
+
+/* Countdown ring (Phase 7): per-entry SVG circle; the ring tracks
+   --ring-progress set inline by the tick loop. */
+.entry-ring {
+  width: 34px;
+  height: 34px;
+  transform: rotate(-90deg);
+  flex: none;
+}
+.entry-ring circle {
+  fill: none;
+  stroke-width: 3;
+}
+.entry-ring .ring-track {
+  stroke: var(--white-8);
+}
+.entry-ring .ring-progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.95s linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .entry-ring {
+    display: none;
+  }
+}
+
+/* Drag & drop handle + live preview (Phase 7) */
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 4px 2px;
+  line-height: 1;
+}
+.drag-handle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+.entry.dragging {
+  opacity: 0.55;
+}
+.entry.drag-over {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+}
+body.dragging-entry {
+  user-select: none;
 }

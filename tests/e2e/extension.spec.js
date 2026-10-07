@@ -11,6 +11,7 @@ test("extension popup supports adding and filtering OTP entries", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -69,6 +70,7 @@ test("extension popup supports encryption, unlock, and copy history", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -95,7 +97,7 @@ test("extension popup supports encryption, unlock, and copy history", async () =
     await page.locator("#lock-btn").click();
     await expect(page.locator("#unlock-panel")).toBeVisible();
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
 
     await page.locator(".entry-card").first().getByRole("button", { name: "Copy" }).click();
@@ -113,6 +115,7 @@ test("extension copy history keeps deduped recent labels while rapidly switching
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -159,6 +162,7 @@ test("extension keeps encryption controls unchanged when encrypted save fails", 
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -208,6 +212,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -237,7 +242,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
       };
       chrome.storage.local.remove = async (keys) => {
         const keyList = Array.isArray(keys) ? keys : [keys];
-        if (keyList.includes("otp_extension_entries_v2") && encryptedWriteCount > 0) {
+        if (keyList.includes("otp_extension_entries_v3") && encryptedWriteCount > 0) {
           throw new Error("Simulated extension artifact cleanup failure");
         }
         return originalRemove(keys);
@@ -254,7 +259,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
     await expect(page.locator(".entry-card")).toHaveCount(1);
 
     const plainEntries = await page.evaluate(() =>
-      new Promise((resolve) => chrome.storage.local.get("otp_extension_entries_v2", (r) => resolve(r.otp_extension_entries_v2)))
+      new Promise((resolve) => chrome.storage.local.get("otp_extension_entries_v3", (r) => resolve(r.otp_extension_entries_v3)))
     );
     expect(plainEntries).not.toBeNull();
     expect(plainEntries).toHaveLength(1);
@@ -270,6 +275,7 @@ test("extension keeps failed-save security state stable after popup reopen and p
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -331,7 +337,7 @@ test("extension keeps failed-save security state stable after popup reopen and p
     await expect(reopenedPage.locator(".entry-card")).toHaveCount(0);
 
     await reopenedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedPage.locator("#unlock-btn").click();
     await expect(reopenedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedPage.locator(".entry-card")).toHaveCount(1);
@@ -347,6 +353,7 @@ test("extension persists encrypted vault and unlocks after popup reopen", async 
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -399,6 +406,7 @@ test("extension stays locked across repeated wrong unlock attempts before succes
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -430,19 +438,19 @@ test("extension stays locked across repeated wrong unlock attempts before succes
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong two");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -458,6 +466,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -490,7 +499,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
@@ -504,7 +513,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Incorrect passphrase");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -520,6 +529,7 @@ test("extension clears partial unlock input after popup reopen while staying loc
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -565,7 +575,7 @@ test("extension clears partial unlock input after popup reopen while staying loc
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(0);
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -581,6 +591,7 @@ test("extension shows clean unlock status after multiple failed attempts and pop
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -613,12 +624,12 @@ test("extension shows clean unlock status after multiple failed attempts and pop
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong two");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
@@ -632,7 +643,7 @@ test("extension shows clean unlock status after multiple failed attempts and pop
     await expect(reopenedLockedPage.locator("#unlock-status")).toHaveText("");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -648,6 +659,7 @@ test("extension keeps locked view free of stale success message after relock and
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -677,7 +689,7 @@ test("extension keeps locked view free of stale success message after relock and
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(page.locator("#unlock-panel")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
@@ -696,7 +708,7 @@ test("extension keeps locked view free of stale success message after relock and
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Vault unlocked");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -712,6 +724,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -741,7 +754,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("wrong passphrase");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
@@ -755,7 +768,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Incorrect passphrase");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -771,6 +784,7 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -800,12 +814,12 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("wrong passphrase");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(page.locator("#unlock-panel")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
@@ -824,7 +838,7 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
     await expect(reopenedLockedPage.locator("#unlock-status")).toHaveText("");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -840,6 +854,7 @@ test("extension removes individual entries with destructive actions", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -890,6 +905,7 @@ test("extension preserves entries when encrypted entry removal persistence fails
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -939,6 +955,7 @@ test("extension security form must not silently change active passphrase", async
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -974,7 +991,7 @@ test("extension security form must not silently change active passphrase", async
     await expect(lockedPage.locator("#status")).toHaveText("");
 
     await lockedPage.locator("#unlock-passphrase").fill(originalPassphrase);
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
 
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -990,6 +1007,7 @@ test("extension encrypted vault hides primary passphrase fields after setup", as
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1029,6 +1047,7 @@ test("extension dedicated passphrase change updates unlock passphrase", async ()
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1066,7 +1085,7 @@ test("extension dedicated passphrase change updates unlock passphrase", async ()
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
 
     await lockedPage.locator("#unlock-passphrase").fill(newPassphrase);
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
 
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -1082,6 +1101,7 @@ test("extension copy history renders labels as text instead of HTML", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1114,6 +1134,7 @@ test("extension remove requires confirmation", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1138,6 +1159,212 @@ test("extension remove requires confirmation", async () => {
     await page.locator("#cancel-remove").click();
     await expect(page.locator("#confirm-remove-dialog")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension throttles unlock attempts with backoff and recovers", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-throttle-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    colorScheme: "dark",
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    // Frozen page clock keeps the 1s backoff window open until the test
+    // advances time, making the countdown observable deterministically.
+    await page.addInitScript(() => {
+      const RealDate = Date;
+      const installedAtReal = RealDate.now();
+      let offsetMs = 0;
+      class MockDate extends RealDate {
+        constructor(...args) {
+          super(...(args.length === 0 ? [installedAtReal + offsetMs] : args));
+        }
+
+        static now() {
+          return installedAtReal + offsetMs;
+        }
+      }
+      Object.setPrototypeOf(MockDate, RealDate);
+      window.Date = MockDate;
+      window.__advanceClockMs = (ms) => {
+        offsetMs += ms;
+      };
+    });
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Secure:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#encrypt-toggle").check();
+    await page.locator("#passphrase").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").press("Enter");
+    await expect(page.locator("#status")).toContainText("Encrypted extension vault saved");
+
+    await page.locator("#lock-btn").click();
+    await expect(page.locator("#unlock-panel")).toBeVisible();
+
+    // Wait on the persisted guard instead of the status text: the previous
+    // attempt's identical "Incorrect passphrase" message satisfies a text
+    // match immediately and lets the next click race the in-flight attempt.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await page.locator("#unlock-passphrase").fill("wrong wrong wrong");
+      await page.locator("#unlock-btn").click();
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const stored = await chrome.storage.local.get("otp_extension_unlock_guard_v1");
+            return stored.otp_extension_unlock_guard_v1?.attempts ?? 0;
+          })
+        )
+        .toBe(attempt);
+    }
+
+    // Backoff active: countdown visible, button disabled, guard persisted.
+    await expect(page.locator("#unlock-status")).toContainText("unlock available in");
+    await expect(page.locator("#unlock-btn")).toBeDisabled();
+
+    await page.evaluate(() => window.__advanceClockMs(2000));
+    await page.locator("#unlock-passphrase").fill("correct horse battery");
+    await page.locator("#unlock-btn").click();
+    await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension undo survives popup close and reopen via the tombstone", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-undo-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    colorScheme: "dark",
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Undo:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+    await expect(page.locator(".entry-card")).toHaveCount(1);
+
+    await page.locator(".entry-card").first().locator(".remove").click();
+    await page.locator("#confirm-remove").click();
+    await expect(page.locator(".entry-card")).toHaveCount(0);
+    await page.waitForTimeout(300);
+
+    // Closing the popup destroys its JS context; the tombstone survives.
+    await page.close();
+    const reopened = await context.newPage();
+    await reopened.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(reopened.locator(".entry-card")).toHaveCount(0);
+    await expect(reopened.locator("#status")).toContainText("deleted");
+
+    await reopened.getByRole("button", { name: "Undo delete" }).click();
+    await expect(reopened.locator(".entry-card")).toHaveCount(1);
+    await expect(reopened.locator(".issuer")).toHaveText("Undo");
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension exports a backup and stamps the reminder", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-export-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    colorScheme: "dark",
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Export:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+    await expect(page.locator(".entry-card")).toHaveCount(1);
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#export-backup").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("otp-vault-extension-backup.json");
+
+    await expect(page.locator("#last-export-line")).toContainText("Last export: today");
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension time drift check warns on a skewed mocked server clock", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-drift-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    colorScheme: "dark",
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#time-drift-toggle").check();
+    await page.locator("#save-security").click();
+    await expect(page.locator("#status")).toContainText("plain local storage");
+
+    await page.route("https://www.cloudflare.com/cdn-cgi/trace", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/plain",
+      body: `fl=1f91\nip=203.0.113.9\nts=${(Date.now() / 1000) + 30}\n`,
+    }));
+
+    await page.locator("#check-drift-btn").click();
+    await expect(page.locator("#drift-banner")).toBeVisible();
+    await expect(page.locator("#drift-skew")).toHaveText(/[0-9]+\.[0-9]s/);
   } finally {
     await context.close();
   }

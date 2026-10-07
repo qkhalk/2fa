@@ -8,6 +8,22 @@ This project uses Service Worker + Cache Storage + Web App Manifest to provide a
 - Local entry access from browser storage when offline
 - Navigation fallback to the cached `index.html`
 - Faster repeated launches after the service worker is installed
+- Fully self-hosted shell: `jsqr` is bundled by esbuild and fonts are vendored woff2 files in `fonts/` — no CDN or third-party origins
+- Camera QR scanning and Google Authenticator migration-QR import work offline
+
+## Content Security Policy
+
+The app ships a meta CSP: scripts, styles, images, and fonts are locked to
+`'self'`; `connect-src` deliberately allows `'self' https:` so the QR-image-URL
+import can fetch arbitrary user-supplied hosts (the feature is opt-in per
+fetch). Because a meta CSP cannot deliver `frame-ancestors` (CSP3 ignores it in
+meta), framing protection is a HOSTING concern: serve the PWA with
+`X-Frame-Options: DENY` or a `Content-Security-Policy: frame-ancestors 'none'`
+response header.
+
+Release note: `sw.js` `CACHE_NAME` must be bumped in every release that changes
+`app.bundle.js` — cache-first serving otherwise keeps stale bundles alive in
+already-open tabs.
 
 ## Safari / iOS Checklist
 
