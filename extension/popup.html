@@ -87,6 +87,16 @@
         <input id="encrypt-toggle" type="checkbox">
         <span>Encrypt entries in extension storage</span>
       </label>
+      <label>
+        <span>Auto-lock</span>
+        <select id="auto-lock-select">
+          <option value="5">After 5 minutes idle</option>
+          <option value="15" selected>After 15 minutes idle</option>
+          <option value="30">After 30 minutes idle</option>
+          <option value="0">Off</option>
+        </select>
+      </label>
+      <p class="status">Closing this popup always locks the vault immediately.</p>
       <div id="passphrase-fields" class="hidden">
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">

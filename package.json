@@ -18,7 +18,11 @@
     "@playwright/test": "^1.54.2",
     "esbuild": "^0.25.10",
     "http-server": "^14.1.1",
+    "qrcode": "^1.5.4",
     "sharp": "^0.34.4",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0"
   }
 }

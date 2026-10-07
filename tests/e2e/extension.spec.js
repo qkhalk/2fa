@@ -95,7 +95,7 @@ test("extension popup supports encryption, unlock, and copy history", async () =
     await page.locator("#lock-btn").click();
     await expect(page.locator("#unlock-panel")).toBeVisible();
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
 
     await page.locator(".entry-card").first().getByRole("button", { name: "Copy" }).click();
@@ -331,7 +331,7 @@ test("extension keeps failed-save security state stable after popup reopen and p
     await expect(reopenedPage.locator(".entry-card")).toHaveCount(0);
 
     await reopenedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedPage.locator("#unlock-btn").click();
     await expect(reopenedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedPage.locator(".entry-card")).toHaveCount(1);
@@ -430,19 +430,19 @@ test("extension stays locked across repeated wrong unlock attempts before succes
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong two");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -490,7 +490,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
@@ -504,7 +504,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Incorrect passphrase");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -565,7 +565,7 @@ test("extension clears partial unlock input after popup reopen while staying loc
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(0);
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -613,12 +613,12 @@ test("extension shows clean unlock status after multiple failed attempts and pop
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong one");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
     await lockedPage.locator("#unlock-passphrase").fill("wrong two");
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
     await expect(lockedPage.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(0);
 
@@ -632,7 +632,7 @@ test("extension shows clean unlock status after multiple failed attempts and pop
     await expect(reopenedLockedPage.locator("#unlock-status")).toHaveText("");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -677,7 +677,7 @@ test("extension keeps locked view free of stale success message after relock and
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(page.locator("#unlock-panel")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
@@ -696,7 +696,7 @@ test("extension keeps locked view free of stale success message after relock and
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Vault unlocked");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -741,7 +741,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("wrong passphrase");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
@@ -755,7 +755,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
     await expect(reopenedLockedPage.locator("#unlock-status")).not.toContainText("Incorrect passphrase");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -800,12 +800,12 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("wrong passphrase");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
     await expect(page.locator(".entry-card")).toHaveCount(0);
 
     await page.locator("#unlock-passphrase").fill("correct horse battery");
-    await page.locator("#unlock-passphrase").press("Enter");
+    await page.locator("#unlock-btn").click();
     await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(page.locator("#unlock-panel")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
@@ -824,7 +824,7 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
     await expect(reopenedLockedPage.locator("#unlock-status")).toHaveText("");
 
     await reopenedLockedPage.locator("#unlock-passphrase").fill("correct horse battery");
-    await reopenedLockedPage.locator("#unlock-passphrase").press("Enter");
+    await reopenedLockedPage.locator("#unlock-btn").click();
     await expect(reopenedLockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(reopenedLockedPage.locator("#unlock-panel")).toBeHidden();
     await expect(reopenedLockedPage.locator(".entry-card")).toHaveCount(1);
@@ -974,7 +974,7 @@ test("extension security form must not silently change active passphrase", async
     await expect(lockedPage.locator("#status")).toHaveText("");
 
     await lockedPage.locator("#unlock-passphrase").fill(originalPassphrase);
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
 
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -1066,7 +1066,7 @@ test("extension dedicated passphrase change updates unlock passphrase", async ()
     await expect(lockedPage.locator("#unlock-panel")).toBeVisible();
 
     await lockedPage.locator("#unlock-passphrase").fill(newPassphrase);
-    await lockedPage.locator("#unlock-passphrase").press("Enter");
+    await lockedPage.locator("#unlock-btn").click();
 
     await expect(lockedPage.locator("#unlock-status")).toContainText("Vault unlocked");
     await expect(lockedPage.locator(".entry-card")).toHaveCount(1);
@@ -1138,6 +1138,80 @@ test("extension remove requires confirmation", async () => {
     await page.locator("#cancel-remove").click();
     await expect(page.locator("#confirm-remove-dialog")).toBeHidden();
     await expect(page.locator(".entry-card")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension throttles unlock attempts with backoff and recovers", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-throttle-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    // Frozen page clock keeps the 1s backoff window open until the test
+    // advances time, making the countdown observable deterministically.
+    await page.addInitScript(() => {
+      const RealDate = Date;
+      const installedAtReal = RealDate.now();
+      let offsetMs = 0;
+      class MockDate extends RealDate {
+        constructor(...args) {
+          super(...(args.length === 0 ? [installedAtReal + offsetMs] : args));
+        }
+
+        static now() {
+          return installedAtReal + offsetMs;
+        }
+      }
+      Object.setPrototypeOf(MockDate, RealDate);
+      window.Date = MockDate;
+      window.__advanceClockMs = (ms) => {
+        offsetMs += ms;
+      };
+    });
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Secure:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#encrypt-toggle").check();
+    await page.locator("#passphrase").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").fill("correct horse battery");
+    await page.locator("#passphrase-confirm").press("Enter");
+    await expect(page.locator("#status")).toContainText("Encrypted extension vault saved");
+
+    await page.locator("#lock-btn").click();
+    await expect(page.locator("#unlock-panel")).toBeVisible();
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await page.locator("#unlock-passphrase").fill("wrong wrong wrong");
+      await page.locator("#unlock-btn").click();
+      await expect(page.locator("#unlock-status")).toContainText("Incorrect passphrase");
+      await expect(page.locator("#unlock-btn")).toBeEnabled();
+    }
+
+    // Backoff active: countdown visible, button disabled, guard persisted.
+    await expect(page.locator("#unlock-status")).toContainText("unlock available in");
+    await expect(page.locator("#unlock-btn")).toBeDisabled();
+
+    await page.evaluate(() => window.__advanceClockMs(2000));
+    await page.locator("#unlock-passphrase").fill("correct horse battery");
+    await page.locator("#unlock-btn").click();
+    await expect(page.locator("#unlock-status")).toContainText("Vault unlocked");
   } finally {
     await context.close();
   }

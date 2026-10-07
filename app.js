@@ -1,3 +1,4 @@
+import jsQR from "jsqr";
 import {
   compareEntries,
   entryMatchesQuery,
@@ -140,6 +141,7 @@ var defaultSettings = {
   blurCodes: false,
   screenshotSafe: false,
   clearClipboard: false,
+  autoLockMinutes: 15,
   sortBy: "pinned-alpha",
   groupBy: "none"
 };
@@ -148,6 +150,9 @@ var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var currentPassphrase = "";
 var staleVaultTab = false;
+var UNLOCK_GUARD_KEY = "personal_otp_vault_unlock_guard_v1";
+var lastActivity = Date.now();
+var operationDepth = 0;
 var cameraStream = null;
 var cameraScanTimer = null;
 var deferredInstallPrompt = null;
@@ -188,6 +193,8 @@ function saveSettings() {
 function syncSettingsUI() {
   persistToggle.checked = settings.persist;
   encryptToggle.checked = settings.encrypt;
+  const autoLockSelect = document.getElementById("auto-lock-select");
+  if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes);
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
   const hasExistingEncryptedVault = mustUnlockOnLoad && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
   unlockOnLoadToggle.checked = mustUnlockOnLoad ? true : settings.unlockOnLoad;
@@ -335,6 +342,64 @@ function markVaultStale() {
   if (staleVaultTab || !settings.persist) return;
   staleVaultTab = true;
   document.getElementById("vault-stale-banner")?.classList.remove("hidden");
+}
+// The single lock path (auto-lock idle expiry AND the manual "Lock Vault"
+// button): clears the passphrase and sensitive in-memory state. The manual
+// button historically left currentPassphrase resident — this fixes that.
+function lockVault() {
+  currentPassphrase = "";
+  if (unlockPassphraseInput) unlockPassphraseInput.value = "";
+  setUnlockStatus("");
+  entries = [];
+  selectedEntryIds.clear();
+  if (settings.clearClipboard) {
+    copyHistory = [];
+    renderCopyHistory();
+  }
+  stopCameraScan();
+  if (importPreviewState) {
+    importPreviewState = null;
+    importDialog?.close?.();
+  }
+  if (typeof clearPendingUndo === "function") clearPendingUndo();
+  setLocked(true);
+  renderEntries();
+  renderBulkBar();
+}
+function noteActivity() {
+  lastActivity = Date.now();
+}
+function bindAutoLockActivity() {
+  let lastNoted = 0;
+  const throttled = () => {
+    const now = Date.now();
+    if (now - lastNoted < 1000) return;
+    lastNoted = now;
+    noteActivity();
+  };
+  document.addEventListener("pointermove", throttled);
+  document.addEventListener("keydown", throttled);
+  // No visibilitychange reset: returning to the tab must never extend the
+  // session — real time since lastActivity keeps counting while hidden.
+}
+function vaultBusy() {
+  return operationDepth > 0;
+}
+function readUnlockGuard() {
+  try {
+    const raw = localStorage.getItem(UNLOCK_GUARD_KEY);
+    if (!raw) return { attempts: 0, lockedUntil: 0 };
+    const parsed = JSON.parse(raw);
+    return { attempts: Number(parsed.attempts) || 0, lockedUntil: Number(parsed.lockedUntil) || 0 };
+  } catch {
+    return { attempts: 0, lockedUntil: 0 };
+  }
+}
+function writeUnlockGuard(guard) {
+  localStorage.setItem(UNLOCK_GUARD_KEY, JSON.stringify(guard));
+}
+function unlockBackoffSeconds(attempts) {
+  return Math.min(60, 2 ** Math.max(0, attempts - 3));
 }
 function bindMultiTabGuard() {
   window.addEventListener("storage", (event) => {
@@ -771,7 +836,25 @@ function updateTimer(now) {
 async function tick() {
   const now = Math.floor(Date.now() / 1e3);
   updateTimer(now);
-  if (!unlockPanel.classList.contains("hidden") && settings.encrypt) return;
+  if (vaultBusy()) return;
+
+  const vaultLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
+  if (settings.encrypt && settings.autoLockMinutes > 0 && !vaultLocked
+      && Date.now() - lastActivity >= settings.autoLockMinutes * 60000) {
+    lockVault();
+    return;
+  }
+  if (vaultLocked) {
+    const guard = readUnlockGuard();
+    const remainingMs = guard.lockedUntil - Date.now();
+    unlockBtn.disabled = remainingMs > 0;
+    if (remainingMs > 0) {
+      setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil(remainingMs / 1000)}s`, "error");
+    } else if (unlockStatus.classList.contains("error") && unlockStatus.textContent.startsWith("Too many failed attempts")) {
+      setUnlockStatus("");
+    }
+    return;
+  }
   await updateAllEntries(now);
 }
 async function saveEncryptedEntries(payloadEntries, passphrase) {
@@ -986,7 +1069,7 @@ async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
   setImportStatus(`${sourceLabel}: account imported`, "success");
 }
 async function decodeQrFromBlob(blob) {
-  if (typeof window.jsQR !== "function") {
+  if (typeof jsQR !== "function") {
     throw new Error("QR scanner library failed to load");
   }
   const bitmap = await createImageBitmap(blob);
@@ -997,7 +1080,7 @@ async function decodeQrFromBlob(blob) {
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const result = window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+  const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
   if (!result?.data) {
     throw new Error("Could not detect a QR code in that image");
   }
@@ -1059,6 +1142,7 @@ async function handleSaveSettings() {
     blurCodes: blurCodesToggle.checked,
     screenshotSafe: screenshotSafeToggle.checked,
     clearClipboard: clearClipboardToggle.checked,
+    autoLockMinutes: Number(document.getElementById("auto-lock-select")?.value ?? settings.autoLockMinutes) || 0,
     sortBy: sortSelect.value,
     groupBy: groupSelect.value
   };
@@ -1294,12 +1378,12 @@ async function startCameraScan() {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   cameraScanTimer = setInterval(async () => {
-    if (!cameraPreview.videoWidth || !cameraPreview.videoHeight || typeof window.jsQR !== "function") return;
+    if (!cameraPreview.videoWidth || !cameraPreview.videoHeight || typeof jsQR !== "function") return;
     canvas.width = cameraPreview.videoWidth;
     canvas.height = cameraPreview.videoHeight;
     ctx.drawImage(cameraPreview, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const result = window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+    const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
     const otpUri = extractOtpAuthUri(result?.data || "");
     if (!otpUri) {
       cameraDetection = { uri: "", hits: 0 };
@@ -1344,6 +1428,7 @@ function registerPwaSupport() {
 function bindEvents() {
   bindMultiTabGuard();
   bindPassphraseStrengthMeters();
+  bindAutoLockActivity();
   document.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
     if (event.key === "/") {
@@ -1581,20 +1666,33 @@ function bindEvents() {
       setSettingsStatus("Enable encrypted storage to use lock/unlock", "error");
       return;
     }
-    entries = [];
-    setUnlockStatus("");
-    setLocked(true);
-    renderEntries();
+    lockVault();
   });
   unlockForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const guard = readUnlockGuard();
+    const now = Date.now();
+    if (guard.lockedUntil > now) {
+      setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - now) / 1000)}s`, "error");
+      return;
+    }
+    unlockBtn.disabled = true;
+    operationDepth += 1;
     try {
       await unlockVault(unlockPassphraseInput.value);
+      writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
       unlockPassphraseInput.value = "";
       setUnlockStatus("Vault unlocked", "success");
     } catch (error) {
+      const attempts = guard.attempts + 1;
+      const backoff = unlockBackoffSeconds(attempts);
+      writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
+      const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
       reportError("Vault unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted vault"), "error");
+      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted vault") + suffix, "error");
+    } finally {
+      operationDepth -= 1;
+      unlockBtn.disabled = false;
     }
   });
   installAppBtn.addEventListener("click", async () => {

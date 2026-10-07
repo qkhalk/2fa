@@ -22,6 +22,10 @@
   },
   "permissions": [
     "storage",
+    "alarms",
+    "idle"
+  ],
+  "optional_permissions": [
     "clipboardRead"
   ]
 }

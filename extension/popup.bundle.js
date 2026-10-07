@@ -27,7 +27,9 @@ function normalizeTags(value) {
   )];
 }
 function generateEntryId() {
-  return `entry_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(6));
+  const random = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `entry_${Date.now().toString(36)}_${random}`;
 }
 function safeDecode(value) {
   try {
@@ -296,6 +298,37 @@ async function deriveVaultKey(passphrase, salt, params = KDF_PARAMS_DEFAULT, cry
     ["encrypt", "decrypt"]
   );
 }
+async function deriveVaultKeyFromPayload(payload, passphrase, cryptoApi = globalThis.crypto) {
+  const normalizedPayload = validateEncryptedPayload(payload);
+  return deriveVaultKey(
+    normalizePassphrase(passphrase),
+    fromBase64(normalizedPayload.salt),
+    resolveKdfParams(normalizedPayload.kdf),
+    requireCrypto(cryptoApi)
+  );
+}
+async function decryptVaultEntriesWithKey(key, payload, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  const normalizedPayload = validateEncryptedPayload(payload);
+  try {
+    const decrypted = await safeCrypto.subtle.decrypt(
+      { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
+      key,
+      fromBase64(normalizedPayload.data)
+    );
+    const parsed = JSON.parse(decoder.decode(decrypted));
+    return normalizeBackupEntriesStrict(parsed, {
+      message: "Decrypted vault entries are invalid",
+      code: "VAULT_ENTRIES_INVALID"
+    });
+  } catch (error) {
+    if (error instanceof OtpVaultError) throw error;
+    throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {
+      code: "VAULT_DECRYPT_FAILED",
+      cause: error
+    });
+  }
+}
 function validateKdfParams(kdf) {
   if (!kdf || typeof kdf !== "object" || Array.isArray(kdf)) {
     throw new OtpVaultError("Encrypted data has an invalid kdf block", { code: "VAULT_FIELDS" });
@@ -449,6 +482,8 @@ var STORAGE_KEY = "otp_extension_entries_v2";
 var ENCRYPTED_KEY = "otp_extension_encrypted_v1";
 var SETTINGS_KEY = "otp_extension_settings_v1";
 var UI_KEY = "otp_extension_ui_v1";
+var SESSION_UNLOCK_KEY = "otp_extension_session_unlock_v1";
+var UNLOCK_GUARD_KEY = "otp_extension_unlock_guard_v1";
 var form = document.getElementById("entry-form");
 var labelInput = document.getElementById("label");
 var secretInput = document.getElementById("secret");
@@ -504,19 +539,30 @@ var settings = { encrypt: false, sortBy: "alpha" };
 var currentPassphrase = "";
 var copyHistory = [];
 var confirmRemoveCallback = null;
+var lastActivity = Date.now();
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
-  settings = { encrypt: false, sortBy: "alpha", ...stored[SETTINGS_KEY] || {} };
+  settings = { encrypt: false, sortBy: "alpha", autoLockMinutes: 15, ...stored[SETTINGS_KEY] || {} };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
   sortSelect.value = settings.sortBy || "alpha";
+  const autoLockSelect = document.getElementById("auto-lock-select");
+  if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes ?? 15);
   const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
   passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
   passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
   applyUiState();
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
-    setLocked(true);
+    const cached = await readSessionUnlock(stored[ENCRYPTED_KEY]);
+    if (cached) {
+      entries = cached.entries;
+      currentPassphrase = cached.passphrase;
+      if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
+      setLocked(false);
+    } else {
+      setLocked(true);
+    }
   } else {
     entries = normalizeEntries(stored[STORAGE_KEY]);
     if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
@@ -524,10 +570,37 @@ async function initialize() {
   }
   bindEvents();
   bindPassphraseStrengthMeters();
+  bindAutoLockActivity();
   renderEntries();
   renderCopyHistory();
   tick();
   setInterval(tick, 1e3);
+}
+async function readSessionUnlock(encryptedPayload) {
+  try {
+    const cached = (await chrome.storage.session.get(SESSION_UNLOCK_KEY))[SESSION_UNLOCK_KEY];
+    if (!cached?.passphrase || !cached?.keyHandle) return null;
+    const entriesDecrypted = await decryptVaultEntriesWithKey(cached.keyHandle, encryptedPayload);
+    return { entries: entriesDecrypted, passphrase: cached.passphrase };
+  } catch (error) {
+    reportError("Session unlock cache miss or invalid", error);
+    await chrome.storage.session.remove(SESSION_UNLOCK_KEY);
+    return null;
+  }
+}
+async function writeSessionUnlock(encryptedPayload, passphrase, keyHandle) {
+  try {
+    await chrome.storage.session.set({ [SESSION_UNLOCK_KEY]: { passphrase, keyHandle } });
+  } catch (error) {
+    reportError("Session unlock cache write failed", error);
+  }
+}
+async function clearSessionUnlock() {
+  try {
+    await chrome.storage.session.remove(SESSION_UNLOCK_KEY);
+  } catch (error) {
+    reportError("Session unlock cache clear failed", error);
+  }
 }
 function applyUiState() {
   document.body.classList.toggle("collapsed", collapsed);
@@ -546,6 +619,48 @@ function setMainStatus(message, tone = "") {
 }
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
+}
+function lockVault() {
+  currentPassphrase = "";
+  if (unlockPassphraseInput) unlockPassphraseInput.value = "";
+  setUnlockStatus("");
+  entries = [];
+  if (settings.clearClipboard) {
+    copyHistory = [];
+    renderCopyHistory();
+  }
+  clearSessionUnlock();
+  setLocked(true);
+  renderEntries();
+}
+function noteActivity() {
+  lastActivity = Date.now();
+}
+function bindAutoLockActivity() {
+  let lastNoted = 0;
+  const throttled = () => {
+    const now = Date.now();
+    if (now - lastNoted < 1e3) return;
+    lastNoted = now;
+    noteActivity();
+  };
+  document.addEventListener("pointermove", throttled);
+  document.addEventListener("keydown", throttled);
+}
+async function readUnlockGuard() {
+  try {
+    const stored = await chrome.storage.local.get(UNLOCK_GUARD_KEY);
+    const parsed = stored[UNLOCK_GUARD_KEY];
+    return { attempts: Number(parsed?.attempts) || 0, lockedUntil: Number(parsed?.lockedUntil) || 0 };
+  } catch {
+    return { attempts: 0, lockedUntil: 0 };
+  }
+}
+function writeUnlockGuard(guard) {
+  return chrome.storage.local.set({ [UNLOCK_GUARD_KEY]: guard });
+}
+function unlockBackoffSeconds(attempts) {
+  return Math.min(60, 2 ** Math.max(0, attempts - 3));
 }
 function renderPassphraseStrength(input, meterRoot) {
   if (!input || !meterRoot) return;
@@ -582,6 +697,7 @@ async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseC
   currentPassphrase = normalizePassphrase(nextPassphraseCandidate);
   try {
     await persistEntries();
+    await clearSessionUnlock();
   } catch (error) {
     currentPassphrase = previousPassphrase;
     throw error;
@@ -828,7 +944,22 @@ function updateGlobalTimer(now) {
 async function tick() {
   const now = Math.floor(Date.now() / 1e3);
   updateGlobalTimer(now);
-  if (!unlockPanel.classList.contains("hidden")) return;
+  const vaultLocked = !unlockPanel.classList.contains("hidden");
+  if (settings.encrypt && settings.autoLockMinutes > 0 && !vaultLocked && Date.now() - lastActivity >= settings.autoLockMinutes * 6e4) {
+    lockVault();
+    return;
+  }
+  if (vaultLocked) {
+    const guard = await readUnlockGuard();
+    const remainingMs = guard.lockedUntil - Date.now();
+    unlockBtn.disabled = remainingMs > 0;
+    if (remainingMs > 0) {
+      setUnlockStatus(`Too many failed attempts \u2014 unlock available in ${Math.ceil(remainingMs / 1e3)}s`, "error");
+    } else if (unlockStatus.classList.contains("error") && unlockStatus.textContent.startsWith("Too many failed attempts")) {
+      setUnlockStatus("");
+    }
+    return;
+  }
   await Promise.all(filteredEntries().map((entry) => updateEntryNode(entry, now)));
 }
 async function snapshotVaultArtifacts() {
@@ -952,6 +1083,13 @@ function bindEvents() {
   });
   pasteUriBtn.addEventListener("click", async () => {
     try {
+      let hasClipboardRead = await chrome.permissions.contains({ permissions: ["clipboardRead"] });
+      if (!hasClipboardRead) {
+        hasClipboardRead = await chrome.permissions.request({ permissions: ["clipboardRead"] });
+      }
+      if (!hasClipboardRead) {
+        throw new Error("Clipboard permission denied. Copy the URI into the secret field instead.");
+      }
       const text = await navigator.clipboard.readText();
       const uri = extractOtpAuthUri(text);
       if (!uri) throw new Error("Clipboard does not contain a valid OTP URI");
@@ -1014,6 +1152,8 @@ function bindEvents() {
     try {
       previousArtifacts = await snapshotVaultArtifacts();
       settings.encrypt = encryptToggle.checked;
+      const autoLockSelect = document.getElementById("auto-lock-select");
+      if (autoLockSelect) settings.autoLockMinutes = Number(autoLockSelect.value) || 0;
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {
@@ -1033,6 +1173,7 @@ function bindEvents() {
         await saveEncryptedEntries(entries, currentPassphrase);
       } else {
         currentPassphrase = "";
+        await clearSessionUnlock();
         await chrome.storage.local.set({ [STORAGE_KEY]: entries });
         await chrome.storage.local.remove(ENCRYPTED_KEY);
       }
@@ -1065,12 +1206,17 @@ function bindEvents() {
       setMainStatus("Enable encrypted storage first", "error");
       return;
     }
-    entries = [];
-    setLocked(true);
-    renderEntries();
+    lockVault();
   });
   unlockForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const guard = await readUnlockGuard();
+    const now = Date.now();
+    if (guard.lockedUntil > now) {
+      setUnlockStatus(`Too many failed attempts \u2014 unlock available in ${Math.ceil((guard.lockedUntil - now) / 1e3)}s`, "error");
+      return;
+    }
+    unlockBtn.disabled = true;
     try {
       const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
       const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
@@ -1079,6 +1225,9 @@ function bindEvents() {
       if (isLegacyEncryptedPayload(stored[ENCRYPTED_KEY])) {
         await persistEntries();
       }
+      const keyHandle = await deriveVaultKeyFromPayload(stored[ENCRYPTED_KEY], currentPassphrase);
+      await writeSessionUnlock(stored[ENCRYPTED_KEY], currentPassphrase, keyHandle);
+      await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
       unlockPassphraseInput.value = "";
       setLocked(false);
       renderEntries();
@@ -1086,8 +1235,14 @@ function bindEvents() {
       setUnlockStatus("Vault unlocked", "success");
       setMainStatus("Encrypted extension unlocked", "success");
     } catch (error) {
+      const attempts = guard.attempts + 1;
+      const backoff = unlockBackoffSeconds(attempts);
+      await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1e3 : 0 });
+      const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
       reportError("Extension unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data"), "error");
+      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
+    } finally {
+      unlockBtn.disabled = false;
     }
   });
   cancelEditBtn.addEventListener("click", () => {
