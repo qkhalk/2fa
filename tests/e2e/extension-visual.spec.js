@@ -32,6 +32,7 @@ test("extension popup empty state visual regression", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -66,6 +67,7 @@ test("extension popup populated state visual regression", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -108,6 +110,7 @@ test("extension popup locked state visual regression", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -138,6 +141,55 @@ test("extension popup locked state visual regression", async () => {
     await expect(page.locator("#unlock-panel")).toBeVisible();
 
     await expect(page).toHaveScreenshot("extension-popup-locked.png", {
+      fullPage: true,
+      animations: "disabled",
+      maxDiffPixelRatio: 0.02,
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+// Light-theme variant (Phase 7 FR2): the explicit Light toggle drives
+// data-theme="light" on the popup root.
+test("extension popup populated state light theme visual regression", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-visual-light-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    colorScheme: "dark",
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) {
+      serviceWorker = await context.waitForEvent("serviceworker");
+    }
+
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await loadStableExtensionPopup(page, { width: 400, height: 600 });
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#theme-select").selectOption("light");
+    await page.locator("#save-security").click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    await page.locator("#label").fill("GitHub:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await page.locator("#label").fill("GitLab:user@example.com");
+    await page.locator("#secret").fill("NB2W45DFOIZA====");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+
+    await expect(page).toHaveScreenshot("extension-popup-populated-light.png", {
       fullPage: true,
       animations: "disabled",
       maxDiffPixelRatio: 0.02,

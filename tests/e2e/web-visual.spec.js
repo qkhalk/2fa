@@ -100,3 +100,69 @@ test("web home search no-results desktop visual regression", async ({ page }) =>
     maxDiffPixelRatio: 0.02,
   });
 });
+
+// Light-theme variants (Phase 7 FR2): the explicit Light toggle drives
+// data-theme="light"; the dark variants above cover the default theme.
+async function applyLightTheme(page) {
+  await page.locator("#theme-select").selectOption("light");
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+}
+
+test("web home empty state desktop light theme visual regression", async ({ page }) => {
+  await loadStableHome(page, { width: 1440, height: 1000 });
+  await applyLightTheme(page);
+  await expect(page).toHaveScreenshot("web-home-empty-desktop-light.png", {
+    fullPage: true,
+    animations: "disabled",
+    maxDiffPixelRatio: 0.02,
+  });
+});
+
+test("web home locked state desktop light theme visual regression", async ({ page }) => {
+  const passphrase = "correct horse battery";
+
+  await loadStableHome(page, { width: 1440, height: 1000 });
+  await page.locator("#theme-select").selectOption("light");
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+  await page.locator("#label").fill("Locked:user@example.com");
+  await page.getByRole("button", { name: "Save Entry" }).click();
+
+  await page.locator("#persist-toggle").check();
+  await page.locator("#encrypt-toggle").check();
+  await page.locator("#vault-passphrase").fill(passphrase);
+  await page.locator("#vault-passphrase-confirm").fill(passphrase);
+  await page.getByRole("button", { name: "Save Privacy Settings" }).click();
+  await expect(page.locator("#privacy-dialog")).toBeVisible();
+  await page.getByRole("button", { name: "I Understand" }).click();
+  await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+
+  await page.reload();
+  await expect(page.locator("#unlock-panel")).toBeVisible();
+
+  await expect(page).toHaveScreenshot("web-home-locked-desktop-light.png", {
+    fullPage: true,
+    animations: "disabled",
+    maxDiffPixelRatio: 0.02,
+  });
+});
+
+test("web home populated state desktop light theme visual regression", async ({ page }) => {
+  await loadStableHome(page, { width: 1440, height: 1000 });
+  await applyLightTheme(page);
+  await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+  await page.locator("#label").fill("Alpha:user@example.com");
+  await page.getByRole("button", { name: "Save Entry" }).click();
+
+  await page.locator("#secret").fill("NB2W45DFOIZA====");
+  await page.locator("#label").fill("Beta:user@example.com");
+  await page.getByRole("button", { name: "Save Entry" }).click();
+
+  await expect(page).toHaveScreenshot("web-home-populated-desktop-light.png", {
+    fullPage: true,
+    animations: "disabled",
+    maxDiffPixelRatio: 0.02,
+  });
+});
