@@ -758,7 +758,7 @@ async function deriveVaultKey(passphrase, salt, params = KDF_PARAMS_DEFAULT, cry
     material,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt", "decrypt"]
+    ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
   );
 }
 async function deriveVaultKeyFromPayload(payload, passphrase, cryptoApi = globalThis.crypto) {
@@ -892,7 +892,75 @@ function validateEncryptedPayload(payload) {
   if (payload.kdf !== void 0) {
     validateKdfParams(payload.kdf);
   }
+  if (payload.dek !== void 0) {
+    const dek = payload.dek;
+    if (!dek || typeof dek !== "object" || typeof dek.wrapped !== "string" || typeof dek.iv !== "string") {
+      throw new OtpVaultError("Encrypted data has an invalid dek block", { code: "VAULT_FIELDS" });
+    }
+  }
   return payload;
+}
+function isDekEncryptedPayload(payload) {
+  return Boolean(payload && typeof payload === "object" && payload.kdf && typeof payload.kdf === "object" && payload.kdf.mode === "dek-v1" && payload.dek && typeof payload.dek === "object");
+}
+async function unwrapDekWithPassphrase(payload, passphrase, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  const normalizedPayload = validateEncryptedPayload(payload);
+  if (!isDekEncryptedPayload(normalizedPayload)) {
+    throw new OtpVaultError("Encrypted data does not contain a DEK envelope", { code: "VAULT_FIELDS" });
+  }
+  try {
+    const wrapKey = await deriveVaultKey(
+      normalizePassphrase(passphrase),
+      fromBase64(normalizedPayload.salt),
+      resolveKdfParams(normalizedPayload.kdf),
+      safeCrypto
+    );
+    return await safeCrypto.subtle.unwrapKey(
+      "raw",
+      fromBase64(normalizedPayload.dek.wrapped),
+      wrapKey,
+      { name: "AES-GCM", iv: fromBase64(normalizedPayload.dek.iv) },
+      { name: "AES-GCM", length: 256 },
+      // extractable + wrapKey: passphrase change (FR11) and re-enrollment must
+      // re-wrap this DEK after a reload; it is never exported to storage.
+      true,
+      ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+  } catch (error) {
+    throw new OtpVaultError("Incorrect passphrase or unreadable encrypted data", {
+      code: "VAULT_DECRYPT_FAILED",
+      cause: error
+    });
+  }
+}
+async function wrapDekWithPassphrase(dek, passphrase, salt, params = KDF_PARAMS_DEFAULT, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  const wrapKey = await deriveVaultKey(normalizePassphrase(passphrase), salt, params, safeCrypto);
+  const iv = safeCrypto.getRandomValues(new Uint8Array(12));
+  const wrapped = await safeCrypto.subtle.wrapKey("raw", dek, wrapKey, { name: "AES-GCM", iv });
+  return { wrapped: toBase64(new Uint8Array(wrapped)), iv: toBase64(iv) };
+}
+async function generateVaultDek(cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  return safeCrypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
+}
+async function encryptEntriesWithDek(entries2, dek, envelopeMeta, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  const { salt, kdf, dek: dekBlock } = envelopeMeta || {};
+  if (typeof salt !== "string" || !kdf || !dekBlock) {
+    throw new OtpVaultError("A DEK-mode envelope meta block is required", { code: "VAULT_FIELDS" });
+  }
+  const iv = safeCrypto.getRandomValues(new Uint8Array(12));
+  const payload = encoder.encode(JSON.stringify(entries2));
+  const encrypted = await safeCrypto.subtle.encrypt({ name: "AES-GCM", iv }, dek, payload);
+  return {
+    salt,
+    iv: toBase64(iv),
+    data: toBase64(new Uint8Array(encrypted)),
+    kdf: { ...kdf, mode: "dek-v1" },
+    dek: { ...dekBlock }
+  };
 }
 function hasRequiredBackupSecret(secret) {
   if (typeof secret !== "string") return false;
@@ -922,6 +990,19 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
   const normalizedPassphrase = normalizePassphrase(passphrase);
   const normalizedPayload = validateEncryptedPayload(payload);
   try {
+    if (isDekEncryptedPayload(normalizedPayload)) {
+      const dek = await unwrapDekWithPassphrase(normalizedPayload, normalizedPassphrase, safeCrypto);
+      const decrypted2 = await safeCrypto.subtle.decrypt(
+        { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
+        dek,
+        fromBase64(normalizedPayload.data)
+      );
+      const parsed2 = JSON.parse(decoder.decode(decrypted2));
+      return normalizeBackupEntriesStrict(parsed2, {
+        message: "Decrypted vault entries are invalid",
+        code: "VAULT_ENTRIES_INVALID"
+      });
+    }
     const key = await deriveVaultKey(
       normalizedPassphrase,
       fromBase64(normalizedPayload.salt),
@@ -971,10 +1052,295 @@ async function createEncryptedBackup(vaultPayload, cryptoApi = globalThis.crypto
   }, true, cryptoApi);
 }
 
+// lib/biometric.js
+var encoder2 = new TextEncoder();
+var RP_NAME = "Personal OTP Vault";
+var USER_NAME = "otp-vault";
+var KEK_INFO = encoder2.encode("2fa-vault-kek-v1");
+var CEREMONY_TIMEOUT_MS = 6e4;
+var CHALLENGE_BYTES = 32;
+var USER_ID_BYTES = 16;
+var PRF_SALT_BYTES = 32;
+var DEK_BYTES = 32;
+function defaultCredentialsApi() {
+  return globalThis.navigator?.credentials;
+}
+function requireCrypto2(cryptoApi = globalThis.crypto) {
+  if (!cryptoApi?.subtle || typeof cryptoApi.getRandomValues !== "function") {
+    throw new OtpVaultError("Browser crypto support is unavailable", { code: "CRYPTO_UNAVAILABLE" });
+  }
+  return cryptoApi;
+}
+function requireCredentials(credentialsApi, method) {
+  if (!credentialsApi || typeof credentialsApi[method] !== "function") {
+    throw new OtpVaultError("WebAuthn is unavailable in this context", { code: "BIOMETRIC_UNSUPPORTED" });
+  }
+  return credentialsApi;
+}
+function randomBytes(length, cryptoApi) {
+  return requireCrypto2(cryptoApi).getRandomValues(new Uint8Array(length));
+}
+function toRawBase64(bytes) {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+function toB64u(bytes) {
+  if (!ArrayBuffer.isView(bytes)) {
+    throw new OtpVaultError("Base64url encoding expects bytes", { code: "BIOMETRIC_INVALID_STATE" });
+  }
+  return toRawBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function fromB64u(value) {
+  try {
+    if (typeof value !== "string") {
+      throw new TypeError("base64url input must be a string");
+    }
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    const bytes = typeof Buffer !== "undefined" ? new Uint8Array(Buffer.from(padded, "base64")) : Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+    if (toB64u(bytes) !== value) {
+      throw new Error("value is not canonical base64url");
+    }
+    return bytes;
+  } catch (error) {
+    throw new OtpVaultError("Value is not valid base64url", { code: "BIOMETRIC_INVALID_STATE", cause: error });
+  }
+}
+async function prfCapable({
+  credentialsApi = defaultCredentialsApi(),
+  publicKeyCredential = globalThis.PublicKeyCredential
+} = {}) {
+  if (!credentialsApi || typeof publicKeyCredential !== "function") {
+    return false;
+  }
+  let platformAuthenticatorAvailable = false;
+  try {
+    platformAuthenticatorAvailable = await publicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch {
+    platformAuthenticatorAvailable = false;
+  }
+  if (!platformAuthenticatorAvailable) {
+    return false;
+  }
+  try {
+    if (typeof publicKeyCredential.getClientCapabilities !== "function") {
+      return true;
+    }
+    const capabilities = await publicKeyCredential.getClientCapabilities();
+    return capabilities?.prf === true;
+  } catch {
+    return true;
+  }
+}
+function mapCeremonyError(error) {
+  if (error instanceof OtpVaultError) return error;
+  if (error?.name === "NotAllowedError") {
+    return new OtpVaultError("Biometric verification was cancelled or blocked \u2014 use the passphrase to unlock", {
+      code: "BIOMETRIC_NOT_ALLOWED",
+      cause: error
+    });
+  }
+  if (error?.name === "InvalidStateError") {
+    return new OtpVaultError("The authenticator is in an invalid state \u2014 use the passphrase to unlock", {
+      code: "BIOMETRIC_INVALID_STATE",
+      cause: error
+    });
+  }
+  if (error?.name === "NotSupportedError") {
+    return new OtpVaultError("This authenticator does not support PRF-based unlock", {
+      code: "BIOMETRIC_UNSUPPORTED",
+      cause: error
+    });
+  }
+  return new OtpVaultError("WebAuthn ceremony failed", { code: "BIOMETRIC_CEREMONY_FAILED", cause: error });
+}
+async function runCreateCeremony({
+  rpId,
+  credentialsApi = defaultCredentialsApi(),
+  cryptoApi = globalThis.crypto
+} = {}) {
+  const safeCredentials = requireCredentials(credentialsApi, "create");
+  const safeCrypto = requireCrypto2(cryptoApi);
+  const publicKey = {
+    challenge: randomBytes(CHALLENGE_BYTES, safeCrypto),
+    rp: { name: RP_NAME, id: rpId },
+    user: {
+      id: randomBytes(USER_ID_BYTES, safeCrypto),
+      name: USER_NAME
+    },
+    pubKeyCredParams: [
+      { type: "public-key", alg: -7 },
+      { type: "public-key", alg: -257 }
+    ],
+    authenticatorSelection: {
+      userVerification: "required",
+      residentKey: "preferred"
+    },
+    timeout: CEREMONY_TIMEOUT_MS,
+    attestation: "none",
+    extensions: { prf: {} }
+  };
+  let credential;
+  try {
+    credential = await safeCredentials.create({ publicKey });
+  } catch (error) {
+    throw mapCeremonyError(error);
+  }
+  const extensionResults = credential?.getClientExtensionResults?.() ?? {};
+  if (extensionResults.prf?.enabled !== true) {
+    throw new OtpVaultError("This authenticator cannot provide PRF-based unlock", {
+      code: "BIOMETRIC_UNSUPPORTED"
+    });
+  }
+  if (!credential.rawId) {
+    throw new OtpVaultError("The authenticator did not return a credential", {
+      code: "BIOMETRIC_CEREMONY_FAILED"
+    });
+  }
+  return { credentialId: toB64u(new Uint8Array(credential.rawId)) };
+}
+async function runAssertCeremony({
+  credentialId,
+  prfSalt,
+  credentialsApi = defaultCredentialsApi(),
+  allowEvalFallback = true,
+  rpId,
+  cryptoApi = globalThis.crypto
+} = {}) {
+  const safeCredentials = requireCredentials(credentialsApi, "get");
+  const safeCrypto = requireCrypto2(cryptoApi);
+  if (!credentialId || typeof credentialId !== "string") {
+    throw new OtpVaultError("No biometric credential is enrolled", { code: "BIOMETRIC_INVALID_STATE" });
+  }
+  if (!ArrayBuffer.isView(prfSalt) || prfSalt.byteLength === 0) {
+    throw new OtpVaultError("The stored PRF salt is missing", { code: "BIOMETRIC_INVALID_STATE" });
+  }
+  const idBytes = fromB64u(credentialId);
+  const salts = { first: prfSalt };
+  const buildOptions = (extensions) => {
+    const publicKey = {
+      challenge: randomBytes(CHALLENGE_BYTES, safeCrypto),
+      allowCredentials: [{ id: idBytes, type: "public-key" }],
+      userVerification: "required",
+      timeout: CEREMONY_TIMEOUT_MS,
+      extensions
+    };
+    if (rpId !== void 0) {
+      publicKey.rpId = rpId;
+    }
+    return { publicKey };
+  };
+  let assertion;
+  try {
+    assertion = await safeCredentials.get(buildOptions({
+      prf: { evalByCredential: { [credentialId]: salts } }
+    }));
+  } catch (error) {
+    if (!allowEvalFallback || error?.name !== "NotSupportedError") {
+      throw mapCeremonyError(error);
+    }
+    try {
+      assertion = await safeCredentials.get(buildOptions({ prf: { eval: salts } }));
+    } catch (retryError) {
+      throw mapCeremonyError(retryError);
+    }
+  }
+  const extensionResults = assertion?.getClientExtensionResults?.() ?? {};
+  const first = extensionResults.prf?.results?.first;
+  if (!first) {
+    throw new OtpVaultError("The authenticator did not return PRF output", {
+      code: "BIOMETRIC_UNSUPPORTED"
+    });
+  }
+  return { credentialId, prfOutput: new Uint8Array(first) };
+}
+async function deriveKek(prfOutput, prfSalt, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto2(cryptoApi);
+  try {
+    if (!ArrayBuffer.isView(prfOutput) || prfOutput.byteLength < 16) {
+      throw new Error("PRF output must be at least 16 bytes");
+    }
+    const ikm = await safeCrypto.subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
+    return await safeCrypto.subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt: prfSalt, info: KEK_INFO },
+      ikm,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["wrapKey", "unwrapKey"]
+    );
+  } catch (error) {
+    throw new OtpVaultError("Could not derive the biometric unlock key", {
+      code: "BIOMETRIC_KEY_DERIVATION_FAILED",
+      cause: error
+    });
+  }
+}
+async function wrapDek(dek, kek, iv, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto2(cryptoApi);
+  try {
+    if (!ArrayBuffer.isView(dek) || dek.byteLength !== DEK_BYTES) {
+      throw new Error("The vault key must be 256 bits");
+    }
+    const dekKey = await safeCrypto.subtle.importKey("raw", dek, { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+    const wrapped = await safeCrypto.subtle.wrapKey("raw", dekKey, kek, { name: "AES-GCM", iv });
+    return new Uint8Array(wrapped);
+  } catch (error) {
+    throw new OtpVaultError("Could not wrap the vault key with the biometric key", {
+      code: "BIOMETRIC_KEY_DERIVATION_FAILED",
+      cause: error
+    });
+  }
+}
+async function unwrapDek(wrapped, iv, kek, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto2(cryptoApi);
+  try {
+    return await safeCrypto.subtle.unwrapKey(
+      "raw",
+      wrapped,
+      kek,
+      { name: "AES-GCM", iv },
+      { name: "AES-GCM", length: 256 },
+      // extractable + wrapKey so re-enrollment can re-wrap the held DEK under
+      // a new KEK; raw bytes never leave memory and are never persisted.
+      true,
+      ["encrypt", "decrypt", "wrapKey", "unwrapKey"]
+    );
+  } catch (error) {
+    throw new OtpVaultError("Could not unwrap the vault key with the biometric key", {
+      code: "BIOMETRIC_KEY_DERIVATION_FAILED",
+      cause: error
+    });
+  }
+}
+async function enrollBiometricUnlock({
+  rpId,
+  credentialsApi = defaultCredentialsApi(),
+  cryptoApi = globalThis.crypto
+} = {}) {
+  const safeCrypto = requireCrypto2(cryptoApi);
+  const { credentialId } = await runCreateCeremony({ rpId, credentialsApi, cryptoApi: safeCrypto });
+  const prfSalt = randomBytes(PRF_SALT_BYTES, safeCrypto);
+  const { prfOutput } = await runAssertCeremony({
+    credentialId,
+    prfSalt,
+    credentialsApi,
+    rpId,
+    cryptoApi: safeCrypto
+  });
+  return { credentialId, prfSalt, firstPrfOutput: prfOutput };
+}
+
 // extension/popup.js
 var STORAGE_KEY = "otp_extension_entries_v3";
 var LEGACY_STORAGE_KEY = "otp_extension_entries_v2";
 var ENCRYPTED_KEY = "otp_extension_encrypted_v1";
+var BIOMETRIC_KEY = "otp_extension_biometric_v1";
 var SETTINGS_KEY = "otp_extension_settings_v1";
 var UI_KEY = "otp_extension_ui_v1";
 var SESSION_UNLOCK_KEY = "otp_extension_session_unlock_v1";
@@ -1046,6 +1412,9 @@ var entryNodes = /* @__PURE__ */ new Map();
 var collapsed = false;
 var settings = { encrypt: false, sortBy: "alpha" };
 var currentPassphrase = "";
+var heldDek = null;
+var dekEnvelopeMeta = null;
+var biometricCapable = false;
 var copyHistory = [];
 var confirmRemoveCallback = null;
 var lastActivity = Date.now();
@@ -1071,6 +1440,10 @@ async function initialize() {
     if (cached) {
       entries = cached.entries;
       currentPassphrase = cached.passphrase;
+      if (isDekEncryptedPayload(stored[ENCRYPTED_KEY])) {
+        heldDek = cached.keyHandle;
+        dekEnvelopeMeta = extractDekEnvelopeMeta(stored[ENCRYPTED_KEY]);
+      }
       if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
       setLocked(false);
       await offerUndoFromTombstone();
@@ -1084,21 +1457,32 @@ async function initialize() {
     setLocked(false);
     await offerUndoFromTombstone();
   }
+  if (settings.encrypt && stored[ENCRYPTED_KEY]) {
+    await reconcileOrphanedBiometricRecord();
+  }
   bindEvents();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
   renderEntries();
   renderCopyHistory();
   renderBackupReminder();
+  renderBiometricControls();
   tick();
   setInterval(tick, 1e3);
+  prfCapable().then((capable) => {
+    biometricCapable = capable;
+    renderBiometricControls();
+  }).catch(() => {
+    biometricCapable = false;
+    renderBiometricControls();
+  });
 }
 async function readSessionUnlock(encryptedPayload) {
   try {
     const cached = (await chrome.storage.session.get(SESSION_UNLOCK_KEY))[SESSION_UNLOCK_KEY];
-    if (!cached?.passphrase || !cached?.keyHandle) return null;
+    if (!cached || !cached.keyHandle || typeof cached.passphrase !== "string") return null;
     const entriesDecrypted = await decryptVaultEntriesWithKey(cached.keyHandle, encryptedPayload);
-    return { entries: entriesDecrypted, passphrase: cached.passphrase };
+    return { entries: entriesDecrypted, passphrase: cached.passphrase, keyHandle: cached.keyHandle };
   } catch (error) {
     reportError("Session unlock cache miss or invalid", error);
     await chrome.storage.session.remove(SESSION_UNLOCK_KEY);
@@ -1118,6 +1502,81 @@ async function clearSessionUnlock() {
   } catch (error) {
     reportError("Session unlock cache clear failed", error);
   }
+}
+function bytesToBase64(bytes) {
+  let text = "";
+  for (const byte of bytes) text += String.fromCharCode(byte);
+  return btoa(text);
+}
+function base64ToBytes(value) {
+  const text = atob(value);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) bytes[i] = text.charCodeAt(i);
+  return bytes;
+}
+async function readBiometricRecord() {
+  try {
+    const stored = await chrome.storage.local.get(BIOMETRIC_KEY);
+    const record = stored[BIOMETRIC_KEY];
+    if (!record || typeof record.credentialId !== "string" || typeof record.prfSalt !== "string" || typeof record.wrappedDek !== "string" || typeof record.wrappedIv !== "string") {
+      return null;
+    }
+    return record;
+  } catch (error) {
+    reportError("Failed to read biometric record", error);
+    return null;
+  }
+}
+async function writeBiometricRecord(record) {
+  await chrome.storage.local.set({ [BIOMETRIC_KEY]: record });
+}
+async function removeBiometricRecord() {
+  await chrome.storage.local.remove(BIOMETRIC_KEY);
+}
+function extractDekEnvelopeMeta(payload) {
+  if (!isDekEncryptedPayload(payload)) return null;
+  return { salt: payload.salt, kdf: { ...payload.kdf }, dek: { ...payload.dek } };
+}
+async function exportDekRawBytes(dek) {
+  return new Uint8Array(await crypto.subtle.exportKey("raw", dek));
+}
+async function reconcileOrphanedBiometricRecord() {
+  const record = await readBiometricRecord();
+  if (!record) return;
+  let payload = null;
+  try {
+    const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+    payload = stored[ENCRYPTED_KEY] ?? null;
+  } catch {
+    payload = null;
+  }
+  if (isDekEncryptedPayload(payload)) return;
+  await removeBiometricRecord();
+  renderBiometricControls();
+}
+async function requirePassphrase(actionLabel) {
+  if (currentPassphrase) return currentPassphrase;
+  if (!heldDek) return "";
+  const candidate = window.prompt(`Enter your vault passphrase to ${actionLabel}:`);
+  if (!candidate) throw new Error("Vault passphrase required for this action");
+  const normalized = normalizePassphrase(candidate);
+  const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+  const payload = stored[ENCRYPTED_KEY];
+  if (!payload || !isDekEncryptedPayload(payload)) {
+    throw new Error("Vault passphrase required for this action");
+  }
+  heldDek = await unwrapDekWithPassphrase(payload, normalized);
+  dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+  currentPassphrase = normalized;
+  await writeSessionUnlock(payload, normalized, heldDek);
+  return currentPassphrase;
+}
+function releasePassphrase(previousPassphrase) {
+  if (!previousPassphrase) currentPassphrase = "";
+}
+async function refreshSessionCacheForDek(payload) {
+  if (!heldDek) return;
+  await writeSessionUnlock(payload, currentPassphrase, heldDek);
 }
 function applyUiState() {
   document.body.classList.toggle("collapsed", collapsed);
@@ -1139,6 +1598,8 @@ function setUnlockStatus(message, tone = "") {
 }
 function lockVault() {
   currentPassphrase = "";
+  heldDek = null;
+  dekEnvelopeMeta = null;
   if (unlockPassphraseInput) unlockPassphraseInput.value = "";
   setUnlockStatus("");
   entries = [];
@@ -1274,11 +1735,21 @@ async function writeUndoTombstone(items) {
       });
       return;
     }
-    if (!currentPassphrase) return;
-    const vault = await encryptEntries(items.map((item) => item.entry), currentPassphrase);
-    await chrome.storage.local.set({
-      [UNDO_TOMBSTONE_KEY]: { at: Date.now(), indexes: items.map((item) => item.index), vault }
-    });
+    const indexes = items.map((item) => item.index);
+    const deletedEntries = items.map((item) => item.entry);
+    if (currentPassphrase) {
+      const vault = await encryptEntries(deletedEntries, currentPassphrase);
+      await chrome.storage.local.set({
+        [UNDO_TOMBSTONE_KEY]: { at: Date.now(), indexes, vault }
+      });
+      return;
+    }
+    if (heldDek && dekEnvelopeMeta) {
+      const dekVault = await encryptEntriesWithDek(deletedEntries, heldDek, dekEnvelopeMeta);
+      await chrome.storage.local.set({
+        [UNDO_TOMBSTONE_KEY]: { at: Date.now(), indexes, dekVault }
+      });
+    }
   } catch (error) {
     reportError("Undo tombstone write failed", error);
   }
@@ -1295,7 +1766,13 @@ async function readLiveUndoTombstone() {
       return null;
     }
     let deletedEntries = tombstone.entries || [];
-    if (tombstone.vault) {
+    if (tombstone.dekVault) {
+      if (!heldDek) {
+        await purgeUndoTombstone();
+        return null;
+      }
+      deletedEntries = await decryptVaultEntriesWithKey(heldDek, tombstone.dekVault);
+    } else if (tombstone.vault) {
       deletedEntries = await decryptVaultEntries(tombstone.vault, currentPassphrase);
     }
     if (!Array.isArray(deletedEntries) || deletedEntries.length === 0) {
@@ -1378,22 +1855,28 @@ async function stampBackupExport(envelope) {
   await persistSettings();
 }
 async function exportBackup() {
-  let envelope;
-  if (settings.encrypt) {
-    if (!currentPassphrase) throw new Error("Unlock the extension vault before exporting an encrypted backup");
-    const encryptedPayload = await encryptEntries(entries, currentPassphrase);
-    envelope = await createEncryptedBackup(encryptedPayload);
-  } else {
-    envelope = await createPlainBackup(entries);
+  const previousPassphrase = currentPassphrase;
+  await requirePassphrase("export a backup");
+  try {
+    let envelope;
+    if (settings.encrypt) {
+      if (!currentPassphrase) throw new Error("Unlock the extension vault before exporting an encrypted backup");
+      const encryptedPayload = await encryptEntries(entries, currentPassphrase);
+      envelope = await createEncryptedBackup(encryptedPayload);
+    } else {
+      envelope = await createPlainBackup(entries);
+    }
+    const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "otp-vault-extension-backup.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    await stampBackupExport(envelope);
+  } finally {
+    releasePassphrase(previousPassphrase);
   }
-  const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "otp-vault-extension-backup.json";
-  link.click();
-  URL.revokeObjectURL(url);
-  await stampBackupExport(envelope);
 }
 function renderBackupReminder() {
   const line = document.getElementById("last-export-line");
@@ -1445,17 +1928,38 @@ async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseC
   if (!settings.encrypt) {
     throw new Error("Enable encrypted storage before changing the extension passphrase");
   }
-  if (!currentPassphrase) {
-    throw new Error("Unlock the extension vault before changing the passphrase");
+  const previousPassphrase = currentPassphrase;
+  if (!previousPassphrase) {
+    await requirePassphrase("change the extension passphrase");
   }
   if (currentPassphraseCandidate !== currentPassphrase) {
+    releasePassphrase(previousPassphrase);
     throw new Error("Current passphrase is incorrect");
   }
   if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
+    releasePassphrase(previousPassphrase);
     throw new Error("Passphrase confirmation does not match");
   }
-  const previousPassphrase = currentPassphrase;
-  currentPassphrase = normalizePassphrase(nextPassphraseCandidate);
+  const normalizedNext = normalizePassphrase(nextPassphraseCandidate);
+  const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+  const payload = stored[ENCRYPTED_KEY];
+  if (payload && isDekEncryptedPayload(payload)) {
+    try {
+      const dek = await unwrapDekWithPassphrase(payload, currentPassphrase);
+      const meta = extractDekEnvelopeMeta(payload);
+      const nextDekBlock = await wrapDekWithPassphrase(dek, normalizedNext, base64ToBytes(meta.salt), meta.kdf);
+      const envelope = await encryptEntriesWithDek(entries, dek, { ...meta, dek: nextDekBlock });
+      await chrome.storage.local.set({ [ENCRYPTED_KEY]: envelope });
+      heldDek = dek;
+      dekEnvelopeMeta = extractDekEnvelopeMeta(envelope);
+      currentPassphrase = normalizedNext;
+      await writeSessionUnlock(envelope, currentPassphrase, heldDek);
+    } finally {
+      releasePassphrase(previousPassphrase);
+    }
+    return;
+  }
+  currentPassphrase = normalizedNext;
   try {
     await persistEntries();
     await clearSessionUnlock();
@@ -1463,6 +1967,7 @@ async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseC
     currentPassphrase = previousPassphrase;
     throw error;
   }
+  releasePassphrase(previousPassphrase);
 }
 function setLocked(locked) {
   unlockPanel.classList.toggle("hidden", !locked);
@@ -1561,6 +2066,145 @@ function nextOrderValue(items = entries) {
 }
 function resequenceEntries(items) {
   return items.map((entry, index) => ({ ...entry, order: index + 1 }));
+}
+function resequenceIfUnordered(decrypted) {
+  return decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
+}
+async function unlockWithBiometrics() {
+  const guard = await readUnlockGuard();
+  if (guard.lockedUntil > Date.now()) {
+    setUnlockStatus(`Too many failed attempts \u2014 unlock available in ${Math.ceil((guard.lockedUntil - Date.now()) / 1e3)}s`, "error");
+    return;
+  }
+  const record = await readBiometricRecord();
+  if (!record) {
+    setUnlockStatus("No biometric unlock is enrolled on this device", "error");
+    return;
+  }
+  const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+  const payload = stored[ENCRYPTED_KEY];
+  if (!payload || !isDekEncryptedPayload(payload)) {
+    await reconcileOrphanedBiometricRecord();
+    setUnlockStatus("Biometric unlock is no longer available \u2014 use your passphrase", "error");
+    return;
+  }
+  try {
+    const prfSalt = fromB64u(record.prfSalt);
+    const { prfOutput } = await runAssertCeremony({ credentialId: record.credentialId, prfSalt });
+    const kek = await deriveKek(prfOutput, prfSalt);
+    const dek = await unwrapDek(fromB64u(record.wrappedDek), fromB64u(record.wrappedIv), kek);
+    const decrypted = await decryptVaultEntriesWithKey(dek, payload);
+    heldDek = dek;
+    dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+    currentPassphrase = "";
+    entries = resequenceIfUnordered(decrypted);
+    await writeSessionUnlock(payload, "", heldDek);
+    await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
+    setLocked(false);
+    renderEntries();
+    tick();
+    setUnlockStatus("Vault unlocked with biometrics", "success");
+    setMainStatus("Encrypted extension unlocked", "success");
+  } catch (error) {
+    reportError("Biometric unlock failed", error);
+    setUnlockStatus(toUserMessage(error, "Biometric unlock failed \u2014 use your passphrase"), "error");
+  }
+}
+async function enrollVaultBiometrics() {
+  if (!settings.encrypt) {
+    throw new Error("Enable encrypted storage before enabling biometric unlock");
+  }
+  if (!currentPassphrase && !heldDek) {
+    throw new Error("Unlock the extension vault before enabling biometric unlock");
+  }
+  const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+  const payload = stored[ENCRYPTED_KEY];
+  if (payload && !isDekEncryptedPayload(payload) && !currentPassphrase) {
+    throw new Error("Unlock the extension vault before enabling biometric unlock");
+  }
+  const enrollment = await enrollBiometricUnlock({});
+  const prfSalt = enrollment.prfSalt;
+  const kek = await deriveKek(enrollment.firstPrfOutput, prfSalt);
+  const wrapIv = crypto.getRandomValues(new Uint8Array(12));
+  let dek;
+  let envelope = null;
+  if (payload && isDekEncryptedPayload(payload)) {
+    dek = heldDek || await unwrapDekWithPassphrase(payload, currentPassphrase);
+    dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+  } else {
+    dek = await generateVaultDek();
+    const saltBytes = crypto.getRandomValues(new Uint8Array(KDF_PARAMS_DEFAULT.saltBytes));
+    const dekBlock = await wrapDekWithPassphrase(dek, currentPassphrase, saltBytes, KDF_PARAMS_DEFAULT);
+    envelope = await encryptEntriesWithDek(entries, dek, {
+      salt: bytesToBase64(saltBytes),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: dekBlock
+    });
+  }
+  const rawDek = await exportDekRawBytes(dek);
+  const wrappedDek = await wrapDek(rawDek, kek, wrapIv);
+  const record = {
+    credentialId: enrollment.credentialId,
+    prfSalt: toB64u(prfSalt),
+    wrappedDek: toB64u(wrappedDek),
+    wrappedIv: toB64u(wrapIv)
+  };
+  if (envelope) {
+    await chrome.storage.local.set({ [ENCRYPTED_KEY]: envelope });
+  }
+  await writeBiometricRecord(record);
+  heldDek = dek;
+  if (envelope) {
+    dekEnvelopeMeta = extractDekEnvelopeMeta(envelope);
+    await refreshSessionCacheForDek(envelope);
+  }
+  renderBiometricControls();
+}
+async function disenrollVaultBiometrics() {
+  const record = await readBiometricRecord();
+  if (!record) {
+    setMainStatus("Biometric unlock is not enabled", "error");
+    return;
+  }
+  const confirmed = window.confirm("Disable biometric unlock? The vault returns to passphrase-only storage.");
+  if (!confirmed) return;
+  const previousPassphrase = currentPassphrase;
+  await requirePassphrase("disable biometric unlock");
+  try {
+    const restored = await encryptEntries(entries, currentPassphrase);
+    await chrome.storage.local.set({ [ENCRYPTED_KEY]: restored });
+    await removeBiometricRecord();
+    await clearSessionUnlock();
+    heldDek = null;
+    dekEnvelopeMeta = null;
+    setMainStatus("Biometric unlock disabled \u2014 passphrase-only vault restored", "success");
+  } finally {
+    releasePassphrase(previousPassphrase);
+  }
+  renderBiometricControls();
+}
+function renderBiometricControls() {
+  const section = document.getElementById("biometric-settings");
+  if (!section) return;
+  readBiometricRecord().then((record) => {
+    section.classList.toggle("hidden", !biometricCapable);
+    const enrollBtn = document.getElementById("enroll-biometric-btn");
+    const disenrollBtn = document.getElementById("disenroll-biometric-btn");
+    const statusLine = document.getElementById("biometric-status-line");
+    if (enrollBtn) {
+      enrollBtn.classList.toggle("hidden", !biometricCapable || Boolean(record) || !settings.encrypt);
+    }
+    if (disenrollBtn) {
+      disenrollBtn.classList.toggle("hidden", !biometricCapable || !record);
+    }
+    if (statusLine) {
+      statusLine.textContent = !biometricCapable ? "" : record ? "Biometric unlock is enrolled. Your passphrase remains the recovery method." : settings.encrypt ? "Unlock with your platform authenticator instead of your passphrase." : "Enable encrypted storage first, then enroll biometric unlock.";
+    }
+    const unlockBiometricBtn = document.getElementById("biometric-unlock-btn");
+    if (unlockBiometricBtn) {
+      unlockBiometricBtn.classList.toggle("hidden", !biometricCapable || !record);
+    }
+  });
 }
 function openEditEntryDialog(entry) {
   if (!editEntryDialog?.showModal) return;
@@ -1798,12 +2442,27 @@ async function persistEntries() {
   const previousArtifacts = await snapshotVaultArtifacts();
   try {
     if (settings.encrypt) {
+      if (heldDek) {
+        const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
+        const payload = stored[ENCRYPTED_KEY];
+        if (!payload || !isDekEncryptedPayload(payload) || !dekEnvelopeMeta) {
+          throw new Error("Biometric vault envelope is missing \u2014 unlock with your passphrase to restore it");
+        }
+        const envelope = await encryptEntriesWithDek(entries, heldDek, dekEnvelopeMeta);
+        await chrome.storage.local.set({ [ENCRYPTED_KEY]: envelope });
+        await chrome.storage.local.remove([STORAGE_KEY, LEGACY_STORAGE_KEY]);
+        await refreshSessionCacheForDek(envelope);
+        return;
+      }
       if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
       await saveEncryptedEntries(entries, currentPassphrase);
       return;
     }
     await chrome.storage.local.set({ [STORAGE_KEY]: entries });
     await chrome.storage.local.remove(ENCRYPTED_KEY);
+    await removeBiometricRecord();
+    heldDek = null;
+    dekEnvelopeMeta = null;
   } catch (error) {
     await restoreVaultArtifacts(previousArtifacts);
     throw error;
@@ -2035,6 +2694,7 @@ function bindEvents() {
             passphraseInput.value = "";
             passphraseConfirmInput.value = "";
             await persistSettings();
+            renderBiometricControls();
             setMainStatus("Encrypted extension vault saved", "success");
             return;
           }
@@ -2047,7 +2707,10 @@ function bindEvents() {
         await saveEncryptedEntries(entries, currentPassphrase);
       } else {
         currentPassphrase = "";
+        heldDek = null;
+        dekEnvelopeMeta = null;
         await clearSessionUnlock();
+        await removeBiometricRecord();
         await chrome.storage.local.set({ [STORAGE_KEY]: entries });
         await chrome.storage.local.remove(ENCRYPTED_KEY);
       }
@@ -2063,6 +2726,7 @@ function bindEvents() {
         encryptedVaultExists ? "Encrypted extension vault saved. Use Change Passphrase to rotate your extension secret." : settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage",
         "success"
       );
+      renderBiometricControls();
     } catch (error) {
       settings = previousSettings;
       currentPassphrase = previousPassphrase;
@@ -2082,6 +2746,27 @@ function bindEvents() {
     }
     lockVault();
   });
+  document.getElementById("biometric-unlock-btn")?.addEventListener("click", () => {
+    unlockWithBiometrics();
+  });
+  document.getElementById("enroll-biometric-btn")?.addEventListener("click", async () => {
+    try {
+      await enrollVaultBiometrics();
+      setMainStatus("Biometric unlock enabled on this device", "success");
+    } catch (error) {
+      reportError("Biometric enrollment failed", error);
+      setMainStatus(toUserMessage(error, "Could not enable biometric unlock"), "error");
+      renderBiometricControls();
+    }
+  });
+  document.getElementById("disenroll-biometric-btn")?.addEventListener("click", async () => {
+    try {
+      await disenrollVaultBiometrics();
+    } catch (error) {
+      reportError("Biometric disenroll failed", error);
+      setMainStatus(toUserMessage(error, "Could not disable biometric unlock"), "error");
+    }
+  });
   unlockForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const guard = await readUnlockGuard();
@@ -2093,14 +2778,25 @@ function bindEvents() {
     unlockBtn.disabled = true;
     try {
       const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
-      const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
-      entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
-      currentPassphrase = normalizePassphrase(unlockPassphraseInput.value);
-      if (isLegacyEncryptedPayload(stored[ENCRYPTED_KEY])) {
+      const payload = stored[ENCRYPTED_KEY];
+      const candidate = unlockPassphraseInput.value;
+      let keyHandle;
+      if (isDekEncryptedPayload(payload)) {
+        heldDek = await unwrapDekWithPassphrase(payload, normalizePassphrase(candidate));
+        dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
+        keyHandle = heldDek;
+        entries = resequenceIfUnordered(await decryptVaultEntriesWithKey(heldDek, payload));
+      } else {
+        heldDek = null;
+        dekEnvelopeMeta = null;
+        keyHandle = await deriveVaultKeyFromPayload(payload, normalizePassphrase(candidate));
+        entries = resequenceIfUnordered(await decryptVaultEntries(payload, candidate));
+      }
+      currentPassphrase = normalizePassphrase(candidate);
+      if (isLegacyEncryptedPayload(payload)) {
         await persistEntries();
       }
-      const keyHandle = await deriveVaultKeyFromPayload(stored[ENCRYPTED_KEY], currentPassphrase);
-      await writeSessionUnlock(stored[ENCRYPTED_KEY], currentPassphrase, keyHandle);
+      await writeSessionUnlock(payload, currentPassphrase, keyHandle);
       await writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
       unlockPassphraseInput.value = "";
       setLocked(false);

@@ -86,6 +86,7 @@
       <form id="unlock-form">
         <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
         <button id="unlock-btn" class="primary-btn" type="submit">Unlock</button>
+        <button id="biometric-unlock-btn" class="ghost-btn hidden" type="button">Unlock with biometrics</button>
         <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
           <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
           <span class="strength-label"></span>
@@ -129,6 +130,13 @@
         </div>
       </div>
       <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
+      <div id="biometric-settings" class="hidden">
+        <p id="biometric-status-line" class="status"></p>
+        <div class="security-actions">
+          <button id="enroll-biometric-btn" class="ghost-btn hidden" type="button">Enable biometric unlock</button>
+          <button id="disenroll-biometric-btn" class="ghost-btn hidden" type="button">Disable biometric unlock</button>
+        </div>
+      </div>
       <p id="last-export-line" class="status"></p>
       <div class="security-actions">
         <button id="export-backup" class="ghost-btn" type="button">Export Backup</button>
