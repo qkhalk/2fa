@@ -1,6 +1,6 @@
 # System Architecture
 
-Last updated: 2026-10-06
+Last updated: 2026-10-08
 
 ## Three-Tier Architecture
 
@@ -24,7 +24,7 @@ The Personal OTP Vault follows a clean three-tier architecture where presentatio
 │                     (lib/ modules)                           │
 ├──────────────────────────┬──────────────────────────────────┤
 │  lib/otp.js              │  lib/vault.js                    │
-│  - TOTP Generation       │  - Encryption/Decryption         │
+│  - TOTP/HOTP Generation  │  - Encryption/Decryption         │
 │  - URI Parsing           │  - Key Derivation                │
 │  - Entry Normalization   │  - Backup/Restore                 │
 │  - Search/Sort           │  - Migration Logic                │
@@ -36,7 +36,7 @@ The Personal OTP Vault follows a clean three-tier architecture where presentatio
 │  Browser localStorage     │  Chrome Storage API             │
 │  (personal_otp_vault_*)  │  (otp_extension_*)               │
 │                          │                                  │
-│  - Entries (v2)          │  - Entries (v2)                 │
+│  - Entries (v3)          │  - Entries (v3)                 │
 │  - Encrypted Vault (v1)  │  - Encrypted Vault (v1)          │
 │  - Settings (v3)         │  - Settings (v1)                 │
 └──────────────────────────┴──────────────────────────────────┘
@@ -45,26 +45,15 @@ The Personal OTP Vault follows a clean three-tier architecture where presentatio
 ## Storage Abstraction
 
 ### Root App Storage (localStorage)
-The root web app uses browser localStorage with versioned keys:
-
-```javascript
-// Storage keys
-localStorage.getItem('personal_otp_vault_entries_v2')
-localStorage.getItem('personal_otp_vault_encrypted_v1')
-localStorage.getItem('personal_otp_vault_settings_v3')
-localStorage.getItem('personal_otp_vault_persist_warning_seen_v1')
-```
+The root web app uses browser localStorage with versioned keys following the
+`{prefix}_{name}_v{version}` pattern; the constants are defined at the top of
+`app.js`. The authoritative key inventory lives in
+[Storage Key Evolution](#storage-key-evolution) below.
 
 ### Extension Storage (chrome.storage.local)
-The extension uses Chrome's storage API, which is async and quota-managed:
-
-```javascript
-// Storage keys
-chrome.storage.local.get('otp_extension_entries_v2')
-chrome.storage.local.get('otp_extension_encrypted_v1')
-chrome.storage.local.get('otp_extension_settings_v1')
-chrome.storage.local.get('otp_extension_ui_v1')
-```
+The extension uses Chrome's storage API, which is async and quota-managed.
+The constants are defined at the top of `extension/popup.js`; see
+[Storage Key Evolution](#storage-key-evolution) below for the inventory.
 
 ### Storage Interface Pattern
 Both frontends implement the same logical operations but use different APIs.
@@ -73,11 +62,11 @@ through `initialize` in `extension/popup.js`.
 
 ```javascript
 // Root app (synchronous)
-const entries = normalizeEntries(JSON.parse(localStorage.getItem('personal_otp_vault_entries_v2') || '[]'));
+const entries = normalizeEntries(JSON.parse(localStorage.getItem('personal_otp_vault_entries_v3') || '[]'));
 
 // Extension (asynchronous)
-const result = await chrome.storage.local.get('otp_extension_entries_v2');
-const entries = normalizeEntries(result.otp_extension_entries_v2 || []);
+const result = await chrome.storage.local.get('otp_extension_entries_v3');
+const entries = normalizeEntries(result.otp_extension_entries_v3 || []);
 ```
 
 ## Encryption Pipeline
@@ -194,7 +183,7 @@ sequenceDiagram
     UI->>OTP: Request TOTP for entry
     OTP->>OTP: Extract secret, digits, period
     OTP->>OTP: Calculate current time counter
-    OTP->>Crypto: HMAC-SHA1(key, counter)
+    OTP->>Crypto: HMAC-SHA1/SHA-256/SHA-512 (entry algorithm)
     Crypto->>OTP: Return HMAC result
     OTP->>OTP: Dynamic truncation
     OTP->>OTP: Format code (6 or 8 digits)
@@ -251,7 +240,7 @@ sequenceDiagram
 ## Service Worker and Offline Architecture
 
 ### Service Worker Registration
-See `sw.js` for the owning implementation (`CACHE_NAME = "otp-vault-cache-v3"`,
+See `sw.js` for the owning implementation (`CACHE_NAME`,
 `APP_SHELL`). The cached app shell is the offline entry point; navigation
 requests fall back to the cached `index.html`.
 
@@ -418,10 +407,6 @@ service worker that schedules an auto-lock alarm from the stored settings and
 clears the `chrome.storage.session` unlock cache when the browser goes idle or
 the alarm fires. The popup talks to storage directly via
 `chrome.storage.local`/`chrome.storage.session`; there is no
-popup-to-background message-passing layer.
-
-The popup talks to storage directly via `chrome.storage.local` (see
-`initialize`/`persistEntries` in `extension/popup.js`); there is no
 popup-to-background message-passing layer.
 
 ## Error Handling Architecture

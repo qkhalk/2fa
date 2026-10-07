@@ -89,7 +89,7 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 
 #### FR4: Security Features
 - **Encryption**: Optional PBKDF2 + AES-256-GCM encrypted storage
-- **Key Derivation**: 150,000 iterations, SHA-256, 16-byte salt
+- **Key Derivation**: Parameterized PBKDF2 envelope — 600,000-iteration default, 150,000-iteration legacy floor; SHA-256, 16-byte salt (see `KDF_PARAMS_DEFAULT` in `lib/vault.js`)
 - **Encryption Parameters**: 12-byte IV, 16-byte authentication tag
 - **Passphrase Requirements**: Minimum 8 characters
 - **Privacy Options**: Code blurring, screenshot-safe mode
@@ -214,7 +214,7 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 
 ## Development Priorities
 
-### Current Focus (v0.1.x)
+### Current Focus (v0.2.x)
 - **Stability**: Ensure reliable TOTP generation and vault operations
 - **Cross-Platform Parity**: Feature equality between web app and extension
 - **Testing**: Comprehensive test coverage for domain logic and UI flows
@@ -224,7 +224,6 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 - **Enhanced QR Support**: Steam Guard format and 8-digit code optimization
 - **Backup Format v3**: Enhanced encryption and compression
 - **Cross-Device Sync**: Optional encrypted sync with explicit user consent
-- **Biometric Unlock**: Platform-specific biometric authentication integration
 - **Additional Extension Stores**: Firefox and Safari extension support
 
 ## Risk Assessment
