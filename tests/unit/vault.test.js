@@ -5,11 +5,17 @@ import {
   createEncryptedBackup,
   createPlainBackup,
   decryptVaultEntries,
+  decryptVaultEntriesWithKey,
   encryptEntries,
+  encryptEntriesWithDek,
+  generateVaultDek,
+  isDekEncryptedPayload,
   isLegacyEncryptedPayload,
   KDF_PARAMS_DEFAULT,
   parseBackupFile,
   shouldWarnBackup,
+  unwrapDekWithPassphrase,
+  wrapDekWithPassphrase,
 } from "../../lib/vault.js";
 
 const encoder = new TextEncoder();
@@ -158,6 +164,82 @@ describe("vault helpers", () => {
     expect(shouldWarnBackup({ lastBackupAt: now - 29 * day }, 3, now)).toBe(false);
     expect(shouldWarnBackup({ lastBackupAt: now - 30 * day - 1 }, 1, now)).toBe(true);
     expect(shouldWarnBackup({ lastBackupAt: now }, 1, now)).toBe(false);
+  });
+
+  it("round-trips a DEK-mode envelope through the passphrase recovery path", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+
+    const dekBlock = await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT);
+    const payload = await encryptEntriesWithDek(entries, dek, {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: dekBlock,
+    });
+
+    expect(isDekEncryptedPayload(payload)).toBe(true);
+    expect(payload.kdf.mode).toBe("dek-v1");
+
+    // Standard passphrase decrypt consumer (unlock / backup import) works.
+    const decrypted = await decryptVaultEntries(payload, passphrase);
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+
+    // Wrong passphrase fails closed.
+    await expect(decryptVaultEntries(payload, "wrong passphrase")).rejects.toThrow(
+      "Incorrect passphrase or unreadable encrypted data"
+    );
+
+    // Direct DEK decrypt (biometric unlock path) matches.
+    const unwrappedDek = await unwrapDekWithPassphrase(payload, passphrase);
+    const viaDek = await decryptVaultEntriesWithKey(unwrappedDek, payload);
+    expect(viaDek).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("keeps data stable across DEK-mode saves while rotating the data iv", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+    const meta = {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT),
+    };
+
+    const first = await encryptEntriesWithDek(entries, dek, meta);
+    const second = await encryptEntriesWithDek(entries, dek, {
+      ...meta,
+      dek: await wrapDekWithPassphrase(dek, "a brand new passphrase", salt, KDF_PARAMS_DEFAULT),
+    });
+
+    expect(second.salt).toBe(first.salt);
+    expect(second.kdf).toEqual(first.kdf);
+    expect(second.iv).not.toBe(first.iv);
+    // Same DEK decrypts both saves despite the passphrase wrap change.
+    expect(isDekEncryptedPayload(second)).toBe(true);
+    const decrypted = await decryptVaultEntries(second, "a brand new passphrase");
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects a tampered DEK wrap and malformed dek blocks", async () => {
+    const dek = await generateVaultDek();
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const passphrase = "correct horse battery";
+    const dekBlock = await wrapDekWithPassphrase(dek, passphrase, salt, KDF_PARAMS_DEFAULT);
+    const payload = await encryptEntriesWithDek(entries, dek, {
+      salt: btoa(String.fromCharCode(...salt)),
+      kdf: { ...KDF_PARAMS_DEFAULT },
+      dek: dekBlock,
+    });
+
+    const tampered = { ...payload, dek: { ...dekBlock, wrapped: btoa("garbage") } };
+    await expect(decryptVaultEntries(tampered, passphrase)).rejects.toThrow(
+      "Incorrect passphrase or unreadable encrypted data"
+    );
+
+    await expect(decryptVaultEntries({ ...payload, dek: { wrapped: 5, iv: "x" } }, passphrase)).rejects.toMatchObject({
+      code: "VAULT_FIELDS",
+    });
   });
 
   it("parses plain backups", async () => {
