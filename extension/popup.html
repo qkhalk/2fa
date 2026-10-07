@@ -7,6 +7,10 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <div id="drift-banner" class="drift-banner hidden" role="alert">
+    <span>Device clock off by <span id="drift-skew"></span> — TOTP codes may be rejected.</span>
+    <button id="drift-dismiss" class="ghost-btn" type="button">Dismiss</button>
+  </div>
   <main class="popup-shell">
     <header class="hero">
       <div>
@@ -109,6 +113,11 @@
           <option value="0">Off</option>
         </select>
       </label>
+      <label class="toggle-row">
+        <input id="time-drift-toggle" type="checkbox">
+        <span>Check device clock against server time (needs network)</span>
+      </label>
+      <button id="check-drift-btn" class="ghost-btn" type="button">Check clock now</button>
       <p class="status">Closing this popup always locks the vault immediately.</p>
       <div id="passphrase-fields" class="hidden">
         <input id="passphrase" type="password" placeholder="New passphrase">
@@ -120,7 +129,9 @@
         </div>
       </div>
       <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
+      <p id="last-export-line" class="status"></p>
       <div class="security-actions">
+        <button id="export-backup" class="ghost-btn" type="button">Export Backup</button>
         <button id="change-passphrase-btn" class="ghost-btn hidden" type="button">Change Passphrase</button>
         <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
       </div>

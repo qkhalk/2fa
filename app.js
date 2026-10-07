@@ -35,6 +35,7 @@ import {
   isLegacyEncryptedPayload,
   normalizePassphrase,
   parseBackupFile,
+  shouldWarnBackup,
 } from './lib/vault.js';
 
 // app.js
@@ -159,6 +160,7 @@ var defaultSettings = {
   screenshotSafe: false,
   clearClipboard: false,
   autoLockMinutes: 15,
+  timeDriftCheck: false,
   sortBy: "pinned-alpha",
   groupBy: "none"
 };
@@ -168,8 +170,12 @@ var entryNodes = /* @__PURE__ */ new Map();
 var currentPassphrase = "";
 var staleVaultTab = false;
 var UNLOCK_GUARD_KEY = "personal_otp_vault_unlock_guard_v1";
+var UNDO_TOMBSTONE_KEY = "personal_otp_vault_undo_tombstone_v1";
+var UNDO_TOMBSTONE_TTL_MS = 10 * 60 * 1000;
+var UNDO_TOAST_MS = 10000;
 var lastActivity = Date.now();
 var operationDepth = 0;
+var undoState = null; // { items: [{entry, index}], toastNode, timer }
 var cameraStream = null;
 var cameraScanTimer = null;
 var deferredInstallPrompt = null;
@@ -188,6 +194,7 @@ function initialize() {
   renderCopyHistory();
   renderDebugFeed();
   renderBulkBar();
+  updateDataSafetyBanners();
   tick();
   bindEvents();
   setInterval(tick, 1e3);
@@ -212,6 +219,8 @@ function syncSettingsUI() {
   encryptToggle.checked = settings.encrypt;
   const autoLockSelect = document.getElementById("auto-lock-select");
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes);
+  const timeDriftToggle = document.getElementById("time-drift-toggle");
+  if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
   const hasExistingEncryptedVault = mustUnlockOnLoad && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
   unlockOnLoadToggle.checked = mustUnlockOnLoad ? true : settings.unlockOnLoad;
@@ -335,6 +344,7 @@ function loadVaultOnStartup() {
     if (!encryptedPayload && legacyPlainEntries.length > 0) {
       entries = legacyPlainEntries;
       setLocked(false);
+      offerUndoFromTombstone();
       return;
     }
     entries = [];
@@ -343,6 +353,7 @@ function loadVaultOnStartup() {
   }
   entries = loadPlainEntries();
   setLocked(false);
+  offerUndoFromTombstone();
 }
 function setLocked(locked) {
   unlockPanel.classList.toggle("hidden", !locked);
@@ -378,7 +389,9 @@ function lockVault() {
     importPreviewState = null;
     importDialog?.close?.();
   }
-  if (typeof clearPendingUndo === "function") clearPendingUndo();
+  clearPendingUndo();
+  purgeUndoTombstone();
+  hideDriftBanner();
   setLocked(true);
   renderEntries();
   renderBulkBar();
@@ -585,6 +598,190 @@ async function consumeHotpCounter(entry, action) {
   }
 }
 
+// --- Undo delete with pending-purge tombstone (Phase 5, FR1) ---
+
+// The tombstone rides the vault's own persistence semantics: written only
+// when persistence is on, encrypted with the held passphrase when the vault
+// is encrypted. Auto-purged after 10 minutes; purged immediately on undo,
+// lock, and replacement by a newer deletion.
+async function writeUndoTombstone(items) {
+  try {
+    if (!settings.persist) return;
+    const tombstone = { at: Date.now(), indexes: items.map((item) => item.index) };
+    const deletedEntries = items.map((item) => item.entry);
+    if (settings.encrypt && currentPassphrase) {
+      tombstone.vault = await encryptEntries(deletedEntries, currentPassphrase);
+    } else {
+      tombstone.entries = deletedEntries;
+    }
+    localStorage.setItem(UNDO_TOMBSTONE_KEY, JSON.stringify(tombstone));
+  } catch (error) {
+    reportError("Undo tombstone write failed", error);
+  }
+}
+
+function purgeUndoTombstone() {
+  localStorage.removeItem(UNDO_TOMBSTONE_KEY);
+}
+
+async function readLiveUndoTombstone() {
+  try {
+    const raw = localStorage.getItem(UNDO_TOMBSTONE_KEY);
+    if (!raw) return null;
+    const tombstone = JSON.parse(raw);
+    if (!tombstone || typeof tombstone.at !== "number" || Date.now() - tombstone.at > UNDO_TOMBSTONE_TTL_MS) {
+      purgeUndoTombstone();
+      return null;
+    }
+    let deletedEntries = tombstone.entries || [];
+    if (tombstone.vault) {
+      deletedEntries = await decryptVaultEntries(tombstone.vault, currentPassphrase);
+    }
+    if (!Array.isArray(deletedEntries) || deletedEntries.length === 0) {
+      purgeUndoTombstone();
+      return null;
+    }
+    const indexes = Array.isArray(tombstone.indexes) ? tombstone.indexes : [];
+    return deletedEntries.map((entry, position) => ({ entry, index: indexes[position] ?? position }));
+  } catch (error) {
+    reportError("Undo tombstone read failed", error);
+    purgeUndoTombstone();
+    return null;
+  }
+}
+
+function clearPendingUndo() {
+  if (!undoState) return;
+  if (undoState.timer) clearTimeout(undoState.timer);
+  undoState.toastNode?.remove();
+  undoState = null;
+}
+
+async function undoDelete(items) {
+  clearPendingUndo();
+  purgeUndoTombstone();
+  let reinserted = 0;
+  const nextEntries = [...entries];
+  for (const { entry, index } of items) {
+    // If the same id was re-added meanwhile, keep the current entry (no-op).
+    if (nextEntries.some((existing) => existing.id === entry.id)) continue;
+    nextEntries.splice(Math.min(Math.max(index, 0), nextEntries.length), 0, entry);
+    reinserted += 1;
+  }
+  if (reinserted === 0) {
+    setImportStatus("Nothing to undo — those entries already exist again", "warning");
+    return;
+  }
+  await replaceEntries(nextEntries);
+  setImportStatus(`Restored ${reinserted} entr${reinserted === 1 ? "y" : "ies"}`, "success");
+}
+
+// Shows the 10s undo toast and persists the tombstone so undo survives a
+// reload (web) or popup close (extension). A newer deletion replaces the
+// pending one (single undo buffer).
+async function offerUndoDelete(items) {
+  clearPendingUndo();
+  await writeUndoTombstone(items);
+
+  const toast = document.createElement("div");
+  toast.className = "toast undo";
+  toast.setAttribute("role", "status");
+  const strong = document.createElement("strong");
+  strong.textContent = items.length === 1 ? "Entry removed" : `${items.length} entries removed`;
+  const undoBtn = document.createElement("button");
+  undoBtn.type = "button";
+  undoBtn.className = "btn small";
+  undoBtn.textContent = "Undo";
+  undoBtn.addEventListener("click", () => undoDelete(items));
+  toast.append(strong, undoBtn);
+  toastRegion.appendChild(toast);
+
+  const timer = setTimeout(() => {
+    toast.remove();
+    if (undoState?.toastNode === toast) {
+      purgeUndoTombstone();
+      undoState = null;
+    }
+  }, UNDO_TOAST_MS);
+  undoState = { items, toastNode: toast, timer };
+}
+
+// Called after unlock (and on unlocked startup): a tombstone from a previous
+// session offers undo before its 10-minute expiry.
+async function offerUndoFromTombstone() {
+  if (undoState) return;
+  const items = await readLiveUndoTombstone();
+  if (items) await offerUndoDelete(items);
+}
+
+// --- Backup reminder + time drift banners (Phase 5, FR2/FR3) ---
+
+function setBannerVisible(id, visible) {
+  document.getElementById(id)?.classList.toggle("hidden", !visible);
+}
+function hideDriftBanner() {
+  setBannerVisible("drift-banner", false);
+}
+function renderBackupReminder() {
+  const warn = shouldWarnBackup(settings, entries.length);
+  setBannerVisible("backup-reminder-banner", warn);
+  const line = document.getElementById("last-export-line");
+  if (!line) return;
+  const lastBackupAt = Number(settings.lastBackupAt);
+  if (!Number.isFinite(lastBackupAt) || lastBackupAt <= 0) {
+    line.textContent = "Last export: never";
+    return;
+  }
+  const days = Math.floor((Date.now() - lastBackupAt) / 86400000);
+  const hashSuffix = settings.lastBackupHash ? ` (checksum ${String(settings.lastBackupHash).slice(0, 8)})` : "";
+  line.textContent = `Last export: ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}${hashSuffix}. A cancelled download cannot be detected — verify your backup file after exporting.`;
+}
+function updateDataSafetyBanners() {
+  renderBackupReminder();
+}
+
+function parseHttpDateHeader(value) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function parseTraceTimestamp(text) {
+  const match = /(?:^|\n)ts=([0-9.]+)/.exec(text || "");
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds * 1000 : null;
+}
+function computeSkewMs(serverMs) {
+  if (!Number.isFinite(serverMs)) return null;
+  return Math.abs(Date.now() - serverMs);
+}
+function showDriftBanner(skewMs) {
+  const banner = document.getElementById("drift-banner");
+  if (!banner) return;
+  banner.querySelector("#drift-skew").textContent = `${(skewMs / 1000).toFixed(1)}s`;
+  setBannerVisible("drift-banner", true);
+}
+async function checkTimeDrift() {
+  if (!settings.timeDriftCheck) return;
+  try {
+    let serverMs;
+    if (typeof chrome !== "undefined" && chrome.runtime?.id) {
+      const response = await fetch("https://www.cloudflare.com/cdn-cgi/trace", { cache: "no-store" });
+      serverMs = parseTraceTimestamp(await response.text());
+    } else {
+      const response = await fetch(location.href, { method: "HEAD", cache: "no-store" });
+      serverMs = parseHttpDateHeader(response.headers.get("date"));
+    }
+    const skewMs = computeSkewMs(serverMs);
+    if (skewMs !== null && skewMs > 5000) showDriftBanner(skewMs);
+    else hideDriftBanner();
+  } catch (error) {
+    // Local-first respect: a failed check is a silent skip.
+    reportError("Time drift check skipped", error);
+    hideDriftBanner();
+  }
+}
+
 function openEditEntryDialog(entry) {
   if (!editEntryDialog) return;
   editEntryIdInput.value = entry.id;
@@ -778,14 +975,16 @@ function createEntryNode(entry) {
     try {
       const confirmed = await showConfirmDialog(
         "Remove this entry?",
-        `This will permanently remove "${entry.label}" from your vault. This action cannot be undone.`
+        `This will remove "${entry.label}" from your vault. You can undo for 10 seconds.`
       );
       if (!confirmed) return;
+      const index = entries.findIndex((item) => item.id === entry.id);
       const nextEntries = entries.filter((item) => item.id !== entry.id);
       await replaceEntries(nextEntries);
       selectedEntryIds.delete(entry.id);
       renderBulkBar();
       setImportStatus("Entry removed", "success");
+      if (index >= 0) await offerUndoDelete([{ entry, index }]);
     } catch (error) {
       reportError("Entry removal failed", error);
       setImportStatus(toUserMessage(error, "Could not remove entry"), "error");
@@ -1003,6 +1202,7 @@ async function replaceEntries(nextEntries) {
   }
   renderEntries();
   renderBulkBar();
+  updateDataSafetyBanners();
   await tick();
 }
 function buildManualEntry(input) {
@@ -1301,6 +1501,7 @@ async function unlockVault(passphrase) {
   renderEntries();
   await tick();
   await upgradeLegacyEncryptedVault(payload);
+  await offerUndoFromTombstone();
 }
 async function hashPayloadString(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -1341,6 +1542,7 @@ async function handleSaveSettings() {
     screenshotSafe: screenshotSafeToggle.checked,
     clearClipboard: clearClipboardToggle.checked,
     autoLockMinutes: Number(document.getElementById("auto-lock-select")?.value ?? settings.autoLockMinutes) || 0,
+    timeDriftCheck: document.getElementById("time-drift-toggle")?.checked ?? settings.timeDriftCheck,
     sortBy: sortSelect.value,
     groupBy: groupSelect.value
   };
@@ -1416,15 +1618,27 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 async function exportBackup() {
+  let envelope;
   if (settings.encrypt) {
     if (!currentPassphrase) {
       throw new Error("Unlock the vault before exporting encrypted backup");
     }
     const encryptedPayload = await encryptEntries(entries, currentPassphrase);
-    downloadJson("otp-vault-backup.json", await createEncryptedBackup(encryptedPayload));
-    return;
+    envelope = await createEncryptedBackup(encryptedPayload);
+  } else {
+    envelope = await createPlainBackup(entries);
   }
-  downloadJson("otp-vault-backup.json", await createPlainBackup(entries));
+  downloadJson("otp-vault-backup.json", envelope);
+  await stampBackupExport(envelope);
+}
+// Stamp lastBackupAt when the export envelope is BUILT. Download delivery is
+// fire-and-forget (a blocked/cancelled download is indistinguishable from
+// success), so the honest wording is "Last export" + envelope hash (FR2).
+async function stampBackupExport(envelope) {
+  settings.lastBackupAt = Date.now();
+  settings.lastBackupHash = await hashPayloadString(JSON.stringify(envelope.payload));
+  saveSettings();
+  renderBackupReminder();
 }
 async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
   if (!settings.persist || !settings.encrypt) {
@@ -1636,6 +1850,16 @@ function bindEvents() {
   bindMultiTabGuard();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
+  document.getElementById("drift-dismiss")?.addEventListener("click", hideDriftBanner);
+  document.getElementById("backup-reminder-dismiss")?.addEventListener("click", () => setBannerVisible("backup-reminder-banner", false));
+  document.getElementById("check-drift-btn")?.addEventListener("click", async () => {
+    if (!settings.timeDriftCheck) {
+      setSettingsStatus("Enable the time-drift check first", "warning");
+      return;
+    }
+    await checkTimeDrift();
+    setSettingsStatus("Time check complete — see the banner if your clock is off", "success");
+  });
   document.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
     if (event.key === "/") {
@@ -1840,13 +2064,17 @@ function bindEvents() {
       if (count === 0) return;
       const confirmed = await showConfirmDialog(
         "Remove selected entries?",
-        `This will permanently remove ${count} selected entr${count === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+        `This will remove ${count} selected entr${count === 1 ? "y" : "ies"} from your vault. You can undo for 10 seconds.`
       );
       if (!confirmed) return;
+      const removedItems = entries
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => selectedEntryIds.has(entry.id));
       await replaceEntries(entries.filter((entry) => !selectedEntryIds.has(entry.id)));
       selectedEntryIds.clear();
       renderBulkBar();
       setImportStatus("Selected entries removed", "success");
+      await offerUndoDelete(removedItems);
     } catch (error) {
       reportError("Bulk remove failed", error);
       setImportStatus(toUserMessage(error, "Could not remove selected entries"), "error");

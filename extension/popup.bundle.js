@@ -703,6 +703,7 @@ function stitchMigrationBatches(payloads) {
 // lib/vault.js
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
+var BACKUP_VERSION = 2;
 var KDF_PARAMS_DEFAULT = Object.freeze({
   algorithm: "PBKDF2",
   iterations: 6e5,
@@ -736,6 +737,11 @@ function requireCrypto(cryptoApi = globalThis.crypto) {
     throw new OtpVaultError("Browser crypto support is unavailable", { code: "CRYPTO_UNAVAILABLE" });
   }
   return cryptoApi;
+}
+async function sha256Hex(value, cryptoApi = globalThis.crypto) {
+  const safeCrypto = requireCrypto(cryptoApi);
+  const digest = await safeCrypto.subtle.digest("SHA-256", encoder.encode(value));
+  return [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
 }
 function normalizePassphrase(passphrase) {
   const clean = (passphrase || "").trim();
@@ -832,6 +838,13 @@ var COMMON_PASSPHRASE_PATTERNS = [
   "vault"
 ];
 var STRENGTH_LABELS = ["Very weak", "Weak", "Fair", "Good", "Strong"];
+var BACKUP_REMINDER_MS = 30 * 24 * 60 * 60 * 1e3;
+function shouldWarnBackup(settings2, entryCount, now = Date.now()) {
+  if (!Number.isInteger(entryCount) || entryCount < 1) return false;
+  const lastBackupAt = Number(settings2?.lastBackupAt);
+  if (!Number.isFinite(lastBackupAt) || lastBackupAt <= 0) return true;
+  return now - lastBackupAt > BACKUP_REMINDER_MS;
+}
 function assessPassphraseStrength(passphrase) {
   const value = String(passphrase || "");
   if (value.length === 0) {
@@ -933,6 +946,30 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
     });
   }
 }
+async function buildBackupEnvelope(payload, encrypted, cryptoApi = globalThis.crypto) {
+  return {
+    version: BACKUP_VERSION,
+    encrypted,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    itemCount: encrypted ? 0 : payload.entries.length,
+    checksum: await sha256Hex(JSON.stringify(payload), cryptoApi),
+    payload
+  };
+}
+async function createPlainBackup(entries2, cryptoApi = globalThis.crypto) {
+  const payload = {
+    schemaVersion: 1,
+    entries: entries2
+  };
+  return buildBackupEnvelope(payload, false, cryptoApi);
+}
+async function createEncryptedBackup(vaultPayload, cryptoApi = globalThis.crypto) {
+  validateEncryptedPayload(vaultPayload);
+  return buildBackupEnvelope({
+    schemaVersion: 1,
+    vault: vaultPayload
+  }, true, cryptoApi);
+}
 
 // extension/popup.js
 var STORAGE_KEY = "otp_extension_entries_v3";
@@ -942,6 +979,9 @@ var SETTINGS_KEY = "otp_extension_settings_v1";
 var UI_KEY = "otp_extension_ui_v1";
 var SESSION_UNLOCK_KEY = "otp_extension_session_unlock_v1";
 var UNLOCK_GUARD_KEY = "otp_extension_unlock_guard_v1";
+var UNDO_TOMBSTONE_KEY = "otp_extension_undo_tombstone_v1";
+var UNDO_TOMBSTONE_TTL_MS = 10 * 60 * 1e3;
+var UNDO_TOAST_MS = 1e4;
 var form = document.getElementById("entry-form");
 var labelInput = document.getElementById("label");
 var secretInput = document.getElementById("secret");
@@ -996,6 +1036,7 @@ var saveEditBtn = document.getElementById("save-edit");
 var confirmRemoveDialog = document.getElementById("confirm-remove-dialog");
 var confirmRemoveMessage = document.getElementById("confirm-remove-message");
 var pasteGaBtn = document.getElementById("paste-ga");
+var exportBackupBtn = document.getElementById("export-backup");
 var migrationPreviewDialog = document.getElementById("migration-preview-dialog");
 var migrationPreviewForm = document.getElementById("migration-preview-form");
 var migrationPreviewStatus = document.getElementById("migration-preview-status");
@@ -1009,15 +1050,18 @@ var copyHistory = [];
 var confirmRemoveCallback = null;
 var lastActivity = Date.now();
 var migrationPreviewState = null;
+var undoTombstone = null;
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
-  settings = { encrypt: false, sortBy: "alpha", autoLockMinutes: 15, ...stored[SETTINGS_KEY] || {} };
+  settings = { encrypt: false, sortBy: "alpha", autoLockMinutes: 15, timeDriftCheck: false, ...stored[SETTINGS_KEY] || {} };
   collapsed = Boolean(stored[UI_KEY]?.collapsed);
   encryptToggle.checked = settings.encrypt;
   sortSelect.value = settings.sortBy || "alpha";
   const autoLockSelect = document.getElementById("auto-lock-select");
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes ?? 15);
+  const timeDriftToggle = document.getElementById("time-drift-toggle");
+  if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
   passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
   passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
@@ -1029,6 +1073,7 @@ async function initialize() {
       currentPassphrase = cached.passphrase;
       if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
       setLocked(false);
+      await offerUndoFromTombstone();
     } else {
       setLocked(true);
     }
@@ -1037,12 +1082,14 @@ async function initialize() {
     entries = normalizeEntries(rawEntries);
     if (entries.every((entry) => !entry.order)) entries = resequenceEntries(entries);
     setLocked(false);
+    await offerUndoFromTombstone();
   }
   bindEvents();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
   renderEntries();
   renderCopyHistory();
+  renderBackupReminder();
   tick();
   setInterval(tick, 1e3);
 }
@@ -1100,6 +1147,8 @@ function lockVault() {
     renderCopyHistory();
   }
   clearSessionUnlock();
+  undoTombstone = null;
+  purgeUndoTombstone();
   setLocked(true);
   renderEntries();
 }
@@ -1216,6 +1265,163 @@ async function commitMigrationPreview() {
   if (selected.length === 0) throw new Error("Select at least one entry to import");
   await replaceEntries([...entries, ...selected]);
   migrationPreviewState = null;
+}
+async function writeUndoTombstone(items) {
+  try {
+    if (!settings.encrypt) {
+      await chrome.storage.local.set({
+        [UNDO_TOMBSTONE_KEY]: { at: Date.now(), indexes: items.map((item) => item.index), entries: items.map((item) => item.entry) }
+      });
+      return;
+    }
+    if (!currentPassphrase) return;
+    const vault = await encryptEntries(items.map((item) => item.entry), currentPassphrase);
+    await chrome.storage.local.set({
+      [UNDO_TOMBSTONE_KEY]: { at: Date.now(), indexes: items.map((item) => item.index), vault }
+    });
+  } catch (error) {
+    reportError("Undo tombstone write failed", error);
+  }
+}
+async function purgeUndoTombstone() {
+  await chrome.storage.local.remove(UNDO_TOMBSTONE_KEY);
+}
+async function readLiveUndoTombstone() {
+  try {
+    const stored = await chrome.storage.local.get(UNDO_TOMBSTONE_KEY);
+    const tombstone = stored[UNDO_TOMBSTONE_KEY];
+    if (!tombstone || typeof tombstone.at !== "number" || Date.now() - tombstone.at > UNDO_TOMBSTONE_TTL_MS) {
+      await purgeUndoTombstone();
+      return null;
+    }
+    let deletedEntries = tombstone.entries || [];
+    if (tombstone.vault) {
+      deletedEntries = await decryptVaultEntries(tombstone.vault, currentPassphrase);
+    }
+    if (!Array.isArray(deletedEntries) || deletedEntries.length === 0) {
+      await purgeUndoTombstone();
+      return null;
+    }
+    const indexes = Array.isArray(tombstone.indexes) ? tombstone.indexes : [];
+    return deletedEntries.map((entry, position) => ({ entry, index: indexes[position] ?? position }));
+  } catch (error) {
+    reportError("Undo tombstone read failed", error);
+    await purgeUndoTombstone();
+    return null;
+  }
+}
+async function undoDelete(items) {
+  undoTombstone = null;
+  await purgeUndoTombstone();
+  let reinserted = 0;
+  const nextEntries = [...entries];
+  for (const { entry, index } of items) {
+    if (nextEntries.some((existing) => existing.id === entry.id)) continue;
+    nextEntries.splice(Math.min(Math.max(index, 0), nextEntries.length), 0, entry);
+    reinserted += 1;
+  }
+  if (reinserted === 0) {
+    setMainStatus("Nothing to undo \u2014 those entries already exist again", "warning");
+    return;
+  }
+  await replaceEntries(nextEntries);
+  setMainStatus(`Restored ${reinserted} entr${reinserted === 1 ? "y" : "ies"}`, "success");
+}
+async function offerUndoDelete(items) {
+  await writeUndoTombstone(items);
+  undoTombstone = items;
+  setMainStatus(`${items.length === 1 ? "Entry removed" : `${items.length} entries removed`} \u2014 reopening this popup offers Undo for 10 minutes`, "warning");
+  setTimeout(async () => {
+    if (undoTombstone === items) {
+      undoTombstone = null;
+      await purgeUndoTombstone();
+    }
+  }, UNDO_TOAST_MS);
+}
+async function offerUndoFromTombstone() {
+  if (undoTombstone || !unlockPanel.classList.contains("hidden")) return;
+  const items = await readLiveUndoTombstone();
+  if (!items) return;
+  undoTombstone = items;
+  const status = document.getElementById("status");
+  if (!status) return;
+  status.textContent = items.length === 1 ? "An entry was deleted before this popup closed. Undo?" : `${items.length} entries were deleted before this popup closed. Undo?`;
+  status.classList.add("error");
+  const undoBtn = document.createElement("button");
+  undoBtn.type = "button";
+  undoBtn.className = "ghost-btn";
+  undoBtn.textContent = "Undo delete";
+  undoBtn.addEventListener("click", async () => {
+    undoBtn.remove();
+    await undoDelete(items);
+  });
+  status.appendChild(document.createElement("br"));
+  status.appendChild(undoBtn);
+  setTimeout(async () => {
+    undoBtn.remove();
+    if (undoTombstone === items) {
+      undoTombstone = null;
+      await purgeUndoTombstone();
+    }
+  }, UNDO_TOMBSTONE_TTL_MS);
+}
+function parseTraceTimestamp(text) {
+  const match = /(?:^|\n)ts=([0-9.]+)/.exec(text || "");
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds * 1e3 : null;
+}
+async function stampBackupExport(envelope) {
+  settings.lastBackupAt = Date.now();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(envelope.payload)));
+  settings.lastBackupHash = [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+  await persistSettings();
+}
+async function exportBackup() {
+  let envelope;
+  if (settings.encrypt) {
+    if (!currentPassphrase) throw new Error("Unlock the extension vault before exporting an encrypted backup");
+    const encryptedPayload = await encryptEntries(entries, currentPassphrase);
+    envelope = await createEncryptedBackup(encryptedPayload);
+  } else {
+    envelope = await createPlainBackup(entries);
+  }
+  const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "otp-vault-extension-backup.json";
+  link.click();
+  URL.revokeObjectURL(url);
+  await stampBackupExport(envelope);
+}
+function renderBackupReminder() {
+  const line = document.getElementById("last-export-line");
+  if (!line) return;
+  if (shouldWarnBackup(settings, entries.length)) {
+    line.textContent = settings.lastBackupAt ? "No export in over 30 days \u2014 export a backup below." : entries.length > 0 ? "No export yet \u2014 back this vault up below." : "";
+    line.classList.remove("hidden");
+    return;
+  }
+  const days = Math.floor((Date.now() - Number(settings.lastBackupAt)) / 864e5);
+  line.textContent = `Last export: ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`} (checksum ${String(settings.lastBackupHash || "").slice(0, 8)}). A cancelled download cannot be detected.`;
+}
+async function checkTimeDrift() {
+  if (!settings.timeDriftCheck) return;
+  try {
+    const response = await fetch("https://www.cloudflare.com/cdn-cgi/trace", { cache: "no-store" });
+    const serverMs = parseTraceTimestamp(await response.text());
+    const skewMs = Number.isFinite(serverMs) ? Math.abs(Date.now() - serverMs) : null;
+    const banner = document.getElementById("drift-banner");
+    if (banner) {
+      const skewMs2 = skewMs;
+      banner.querySelector("#drift-skew").textContent = skewMs2 !== null ? `${(skewMs2 / 1e3).toFixed(1)}s` : "";
+      banner.classList.toggle("hidden", !(skewMs2 !== null && skewMs2 > 5e3));
+    }
+  } catch (error) {
+    reportError("Extension time drift check skipped", error);
+    document.getElementById("drift-banner")?.classList.add("hidden");
+  }
 }
 function renderPassphraseStrength(input, meterRoot) {
   if (!input || !meterRoot) return;
@@ -1462,10 +1668,12 @@ function createEntryNode(entry) {
   });
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
-      const confirmed = await showRemoveConfirmation(`Remove "${entry.label}" from the extension vault? This action cannot be undone.`);
+      const confirmed = await showRemoveConfirmation(`Remove "${entry.label}" from the extension vault? You can undo for 10 minutes by reopening the popup.`);
       if (!confirmed) return;
+      const index = entries.findIndex((item) => item.id === entry.id);
       await replaceEntries(entries.filter((item) => item.id !== entry.id));
       setMainStatus("Removed entry", "success");
+      if (index >= 0) await offerUndoDelete([{ entry, index }]);
     } catch (error) {
       reportError("Extension remove failed", error);
       setMainStatus(toUserMessage(error, "Could not remove entry"), "error");
@@ -1745,6 +1953,27 @@ function bindEvents() {
   migrationPreviewDialog?.addEventListener("close", () => {
     migrationPreviewState = null;
   });
+  exportBackupBtn?.addEventListener("click", async () => {
+    try {
+      await exportBackup();
+      renderBackupReminder();
+      setMainStatus("Backup exported", "success");
+    } catch (error) {
+      reportError("Extension backup export failed", error);
+      setMainStatus(toUserMessage(error, "Could not export backup"), "error");
+    }
+  });
+  document.getElementById("check-drift-btn")?.addEventListener("click", async () => {
+    if (!settings.timeDriftCheck) {
+      setMainStatus("Enable the time-drift check first", "warning");
+      return;
+    }
+    await checkTimeDrift();
+    setMainStatus("Time check complete \u2014 see the banner if your clock is off", "success");
+  });
+  document.getElementById("drift-dismiss")?.addEventListener("click", () => {
+    document.getElementById("drift-banner")?.classList.add("hidden");
+  });
   searchInput.addEventListener("input", () => {
     renderEntries();
     tick();
@@ -1797,6 +2026,8 @@ function bindEvents() {
       settings.encrypt = encryptToggle.checked;
       const autoLockSelect = document.getElementById("auto-lock-select");
       if (autoLockSelect) settings.autoLockMinutes = Number(autoLockSelect.value) || 0;
+      const timeDriftToggle = document.getElementById("time-drift-toggle");
+      if (timeDriftToggle) settings.timeDriftCheck = timeDriftToggle.checked;
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {

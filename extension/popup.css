@@ -528,3 +528,25 @@ select:focus {
 .counter.hidden {
   display: none;
 }
+
+/* Phase 5: drift banner */
+.drift-banner {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 92%;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #ffd978);
+  border-radius: 10px;
+  background: var(--surface, #161b27);
+  color: var(--warning, #ffd978);
+  font-size: 12px;
+}
+.drift-banner.hidden {
+  display: none;
+}

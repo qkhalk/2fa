@@ -26,6 +26,16 @@
     <button type="button" id="vault-stale-dismiss" class="btn small ghost">Dismiss</button>
   </div>
 
+  <div id="backup-reminder-banner" class="data-banner hidden" role="status">
+    <span id="backup-reminder-text">No vault export in over 30 days — export a backup from the settings below.</span>
+    <button type="button" id="backup-reminder-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
+
+  <div id="drift-banner" class="data-banner warning hidden" role="alert">
+    <span>Device clock off by <span id="drift-skew"></span> — TOTP codes may be rejected. Fix your system clock.</span>
+    <button type="button" id="drift-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
+
   <main class="app-shell">
     <header class="hero-band">
       <div class="hero-copy">
@@ -230,6 +240,10 @@
                   <option value="0">Off</option>
                 </select>
               </label>
+              <label class="toggle-row">
+                <input id="time-drift-toggle" type="checkbox">
+                <span>Check device clock against server time (needs network)</span>
+              </label>
             </div>
 
             <div id="encryption-fields" class="grid hidden">
@@ -250,6 +264,8 @@
             <p id="passphrase-guidance" class="helper-text hidden">This vault is already encrypted. Use Change Passphrase to rotate your vault secret.</p>
 
 
+            <p id="last-export-line" class="helper-text"></p>
+
             <div class="actions actions-tight">
               <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
               <label class="btn ghost backup-import-label">
@@ -257,6 +273,7 @@
                 <input id="import-backup" type="file" accept="application/json">
               </label>
               <button type="button" id="change-passphrase-btn" class="btn ghost hidden">Change Passphrase</button>
+              <button type="button" id="check-drift-btn" class="btn ghost">Check clock now</button>
               <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
             </div>
 

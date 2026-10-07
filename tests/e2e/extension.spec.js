@@ -1216,3 +1216,122 @@ test("extension throttles unlock attempts with backoff and recovers", async () =
     await context.close();
   }
 });
+
+test("extension undo survives popup close and reopen via the tombstone", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-undo-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Undo:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+    await expect(page.locator(".entry-card")).toHaveCount(1);
+
+    await page.locator(".entry-card").first().locator(".remove").click();
+    await page.locator("#confirm-remove").click();
+    await expect(page.locator(".entry-card")).toHaveCount(0);
+    await page.waitForTimeout(300);
+
+    // Closing the popup destroys its JS context; the tombstone survives.
+    await page.close();
+    const reopened = await context.newPage();
+    await reopened.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(reopened.locator(".entry-card")).toHaveCount(0);
+    await expect(reopened.locator("#status")).toContainText("deleted");
+
+    await reopened.getByRole("button", { name: "Undo delete" }).click();
+    await expect(reopened.locator(".entry-card")).toHaveCount(1);
+    await expect(reopened.locator(".issuer")).toHaveText("Undo");
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension exports a backup and stamps the reminder", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-export-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#label").fill("Export:user@example.com");
+    await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
+    await page.getByRole("button", { name: "Add Entry" }).click();
+    await expect(page.locator(".entry-card")).toHaveCount(1);
+
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator("#export-backup").click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("otp-vault-extension-backup.json");
+
+    await expect(page.locator("#last-export-line")).toContainText("Last export: today");
+  } finally {
+    await context.close();
+  }
+});
+
+test("extension time drift check warns on a skewed mocked server clock", async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), "otp-vault-extension-drift-"));
+  const extensionPath = resolve("extension");
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: "chromium",
+    headless: true,
+    args: [
+      `--disable-extensions-except=${extensionPath}`,
+      `--load-extension=${extensionPath}`,
+    ],
+  });
+
+  try {
+    let [serviceWorker] = context.serviceWorkers();
+    if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
+    const extensionId = new URL(serviceWorker.url()).host;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator("#time-drift-toggle").check();
+    await page.locator("#save-security").click();
+    await expect(page.locator("#status")).toContainText("plain local storage");
+
+    await page.route("https://www.cloudflare.com/cdn-cgi/trace", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/plain",
+      body: `fl=1f91\nip=203.0.113.9\nts=${(Date.now() / 1000) + 30}\n`,
+    }));
+
+    await page.locator("#check-drift-btn").click();
+    await expect(page.locator("#drift-banner")).toBeVisible();
+    await expect(page.locator("#drift-skew")).toHaveText(/[0-9]+\.[0-9]s/);
+  } finally {
+    await context.close();
+  }
+});

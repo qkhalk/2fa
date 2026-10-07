@@ -9,6 +9,7 @@ import {
   isLegacyEncryptedPayload,
   KDF_PARAMS_DEFAULT,
   parseBackupFile,
+  shouldWarnBackup,
 } from "../../lib/vault.js";
 
 const encoder = new TextEncoder();
@@ -127,8 +128,7 @@ describe("vault helpers", () => {
     expect(isLegacyEncryptedPayload(payload)).toBe(false);
   });
 
-  it("scores passphrase strength across the advisory scale", () => {
-    expect(assessPassphraseStrength("")).toEqual({ score: 0, label: "Very weak", warnings: ["Enter a passphrase"] });
+  it("scores passphrase strength across the advisory scale", () => {    expect(assessPassphraseStrength("")).toEqual({ score: 0, label: "Very weak", warnings: ["Enter a passphrase"] });
     expect(assessPassphraseStrength("short").score).toBeLessThanOrEqual(1);
 
     const weak = assessPassphraseStrength("password123");
@@ -146,6 +146,18 @@ describe("vault helpers", () => {
     expect(strong.score).toBe(4);
     expect(strong.label).toBe("Strong");
     expect(strong.warnings).toEqual([]);
+  });
+
+  it("warns about backups on the 30-day rule", () => {
+    const now = 1_700_000_000_000;
+    const day = 24 * 60 * 60 * 1000;
+
+    expect(shouldWarnBackup({}, 0, now)).toBe(false);
+    expect(shouldWarnBackup({}, 3, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now - 31 * day }, 3, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now - 29 * day }, 3, now)).toBe(false);
+    expect(shouldWarnBackup({ lastBackupAt: now - 30 * day - 1 }, 1, now)).toBe(true);
+    expect(shouldWarnBackup({ lastBackupAt: now }, 1, now)).toBe(false);
   });
 
   it("parses plain backups", async () => {
