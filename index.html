@@ -22,6 +22,12 @@
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
 
+  <div id="vault-stale-banner" class="vault-stale-banner hidden" role="status">
+    <span>Vault changed in another tab. This tab is read-only — reload to pick up the latest vault.</span>
+    <button type="button" id="vault-stale-reload" class="btn small">Reload</button>
+    <button type="button" id="vault-stale-dismiss" class="btn small ghost">Dismiss</button>
+  </div>
+
   <main class="app-shell">
     <header class="hero-band">
       <div class="hero-copy">
@@ -60,6 +66,11 @@
       <form id="unlock-form" class="unlock-actions">
         <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
         <button type="submit" id="unlock-btn" class="btn primary">Unlock Vault</button>
+        <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings helper-text"></p>
+        </div>
       </form>
       <p id="unlock-status" class="helper-text status-line" aria-live="polite"></p>
     </section>
@@ -200,6 +211,11 @@
                 <span>Confirm passphrase</span>
                 <input id="vault-passphrase-confirm" type="password" placeholder="Repeat passphrase">
               </label>
+              <div id="set-passphrase-strength" class="passphrase-strength">
+                <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+                <span class="strength-label"></span>
+                <p class="strength-warnings helper-text"></p>
+              </div>
             </div>
             <p id="passphrase-guidance" class="helper-text hidden">This vault is already encrypted. Use Change Passphrase to rotate your vault secret.</p>
 

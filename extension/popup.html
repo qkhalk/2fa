@@ -69,6 +69,11 @@
       <form id="unlock-form">
         <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
         <button id="unlock-btn" class="primary-btn" type="submit">Unlock</button>
+        <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings status"></p>
+        </div>
         <p id="unlock-status" class="status" aria-live="polite"></p>
       </form>
     </section>
@@ -85,6 +90,11 @@
       <div id="passphrase-fields" class="hidden">
         <input id="passphrase" type="password" placeholder="New passphrase">
         <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
+        <div id="set-passphrase-strength" class="passphrase-strength">
+          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+          <span class="strength-label"></span>
+          <p class="strength-warnings status"></p>
+        </div>
       </div>
       <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
       <div class="security-actions">

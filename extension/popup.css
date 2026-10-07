@@ -464,3 +464,51 @@ select:focus {
     opacity: 0.65;
   }
 }
+
+/* Phase 1: passphrase strength meter */
+.passphrase-strength {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+.passphrase-strength .strength-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.passphrase-strength .strength-fill {
+  height: 100%;
+  width: 20%;
+  border-radius: 999px;
+  background: var(--danger, #ff7e7e);
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.passphrase-strength .strength-fill[data-score="1"] {
+  width: 35%;
+  background: var(--danger, #ff7e7e);
+}
+.passphrase-strength .strength-fill[data-score="2"] {
+  width: 55%;
+  background: var(--warning, #ffd978);
+}
+.passphrase-strength .strength-fill[data-score="3"] {
+  width: 78%;
+  background: var(--warning, #ffd978);
+}
+.passphrase-strength .strength-fill[data-score="4"] {
+  width: 100%;
+  background: var(--accent, #ff6f3c);
+}
+.passphrase-strength .strength-label {
+  font-size: 11px;
+  color: var(--muted, #a59f95);
+}
+.passphrase-strength .strength-warnings {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted, #a59f95);
+}
+.passphrase-strength.hidden {
+  display: none;
+}

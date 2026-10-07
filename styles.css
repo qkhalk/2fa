@@ -1007,3 +1007,68 @@ textarea {
     justify-content: start;
   }
 }
+
+/* Phase 1: passphrase strength meter */
+.passphrase-strength {
+  display: grid;
+  gap: 0.35rem;
+}
+.passphrase-strength .strength-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.passphrase-strength .strength-fill {
+  height: 100%;
+  width: 20%;
+  border-radius: 999px;
+  background: var(--danger);
+  transition: width 0.2s ease, background 0.2s ease;
+}
+.passphrase-strength .strength-fill[data-score="1"] {
+  width: 35%;
+  background: var(--danger);
+}
+.passphrase-strength .strength-fill[data-score="2"] {
+  width: 55%;
+  background: var(--warning);
+}
+.passphrase-strength .strength-fill[data-score="3"] {
+  width: 78%;
+  background: var(--warning);
+}
+.passphrase-strength .strength-fill[data-score="4"] {
+  width: 100%;
+  background: linear-gradient(90deg, var(--accent), #ffcf92);
+}
+.passphrase-strength .strength-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.passphrase-strength .strength-warnings {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* Phase 1: multi-tab stale vault banner */
+.vault-stale-banner {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--warning);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.vault-stale-banner.hidden {
+  display: none;
+}

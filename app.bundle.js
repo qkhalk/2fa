@@ -266,6 +266,18 @@ function formatCode(code) {
 var encoder = new TextEncoder();
 var decoder = new TextDecoder();
 var BACKUP_VERSION = 2;
+var KDF_PARAMS_DEFAULT = Object.freeze({
+  algorithm: "PBKDF2",
+  iterations: 6e5,
+  hash: "SHA-256",
+  saltBytes: 16
+});
+var KDF_PARAMS_LEGACY = Object.freeze({
+  algorithm: "PBKDF2",
+  iterations: 15e4,
+  hash: "SHA-256",
+  saltBytes: 16
+});
 function toBase64(uint8) {
   if (typeof Buffer !== "undefined") {
     return Buffer.from(uint8).toString("base64");
@@ -300,29 +312,98 @@ function normalizePassphrase(passphrase) {
   }
   return clean;
 }
-async function deriveVaultKey(passphrase, salt, cryptoApi = globalThis.crypto) {
+async function deriveVaultKey(passphrase, salt, params = KDF_PARAMS_DEFAULT, cryptoApi = globalThis.crypto) {
   const safeCrypto = requireCrypto(cryptoApi);
   const material = await safeCrypto.subtle.importKey("raw", encoder.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
   return safeCrypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: 15e4, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: params.iterations, hash: params.hash },
     material,
     { name: "AES-GCM", length: 256 },
     false,
     ["encrypt", "decrypt"]
   );
 }
+function validateKdfParams(kdf) {
+  if (!kdf || typeof kdf !== "object" || Array.isArray(kdf)) {
+    throw new OtpVaultError("Encrypted data has an invalid kdf block", { code: "VAULT_FIELDS" });
+  }
+  if (kdf.algorithm !== "PBKDF2" || kdf.hash !== "SHA-256") {
+    throw new OtpVaultError("Encrypted data uses an unsupported KDF", { code: "VAULT_FIELDS" });
+  }
+  if (!Number.isInteger(kdf.iterations) || kdf.iterations <= 0) {
+    throw new OtpVaultError("Encrypted data has an invalid kdf block", { code: "VAULT_FIELDS" });
+  }
+  if (kdf.saltBytes !== void 0 && (!Number.isInteger(kdf.saltBytes) || kdf.saltBytes <= 0)) {
+    throw new OtpVaultError("Encrypted data has an invalid kdf block", { code: "VAULT_FIELDS" });
+  }
+  return kdf;
+}
+function resolveKdfParams(kdf) {
+  if (!kdf) return KDF_PARAMS_LEGACY;
+  validateKdfParams(kdf);
+  if (kdf.iterations < KDF_PARAMS_LEGACY.iterations) return KDF_PARAMS_LEGACY;
+  return kdf;
+}
+function isLegacyEncryptedPayload(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  if (!payload.kdf) return true;
+  if (typeof payload.kdf !== "object") return true;
+  return typeof payload.kdf.iterations !== "number" || payload.kdf.iterations < KDF_PARAMS_LEGACY.iterations;
+}
+var COMMON_PASSPHRASE_PATTERNS = [
+  "password",
+  "passwort",
+  "passphrase",
+  "123456",
+  "qwerty",
+  "letmein",
+  "welcome",
+  "iloveyou",
+  "admin",
+  "dragon",
+  "monkey",
+  "sunshine",
+  "princess",
+  "football",
+  "master",
+  "vault"
+];
+var STRENGTH_LABELS = ["Very weak", "Weak", "Fair", "Good", "Strong"];
+function assessPassphraseStrength(passphrase) {
+  const value = String(passphrase || "");
+  if (value.length === 0) {
+    return { score: 0, label: STRENGTH_LABELS[0], warnings: ["Enter a passphrase"] };
+  }
+  let score = 0;
+  if (value.length >= 8) score = 1;
+  if (value.length >= 12) score = 2;
+  const characterClasses = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
+  if (characterClasses >= 3) score += 1;
+  if (characterClasses >= 4) score += 1;
+  const warnings = [];
+  if (COMMON_PASSPHRASE_PATTERNS.some((pattern) => value.toLowerCase().includes(pattern))) {
+    score = Math.max(0, score - 2);
+    warnings.push("Avoid common words and patterns");
+  }
+  if (value.length < 12) {
+    warnings.push("Use at least 12 characters for a stronger passphrase");
+  }
+  score = Math.min(4, score);
+  return { score, label: STRENGTH_LABELS[score], warnings };
+}
 async function encryptEntries(entries2, passphrase, cryptoApi = globalThis.crypto) {
   const safeCrypto = requireCrypto(cryptoApi);
   const normalizedPassphrase = normalizePassphrase(passphrase);
-  const salt = safeCrypto.getRandomValues(new Uint8Array(16));
+  const salt = safeCrypto.getRandomValues(new Uint8Array(KDF_PARAMS_DEFAULT.saltBytes));
   const iv = safeCrypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveVaultKey(normalizedPassphrase, salt, safeCrypto);
+  const key = await deriveVaultKey(normalizedPassphrase, salt, KDF_PARAMS_DEFAULT, safeCrypto);
   const payload = encoder.encode(JSON.stringify(entries2));
   const encrypted = await safeCrypto.subtle.encrypt({ name: "AES-GCM", iv }, key, payload);
   return {
     salt: toBase64(salt),
     iv: toBase64(iv),
-    data: toBase64(new Uint8Array(encrypted))
+    data: toBase64(new Uint8Array(encrypted)),
+    kdf: { ...KDF_PARAMS_DEFAULT }
   };
 }
 function validateEncryptedPayload(payload) {
@@ -331,6 +412,9 @@ function validateEncryptedPayload(payload) {
   }
   if (typeof payload.salt !== "string" || typeof payload.iv !== "string" || typeof payload.data !== "string") {
     throw new OtpVaultError("Encrypted data is missing required fields", { code: "VAULT_FIELDS" });
+  }
+  if (payload.kdf !== void 0) {
+    validateKdfParams(payload.kdf);
   }
   return payload;
 }
@@ -362,7 +446,12 @@ async function decryptVaultEntries(payload, passphrase, cryptoApi = globalThis.c
   const normalizedPassphrase = normalizePassphrase(passphrase);
   const normalizedPayload = validateEncryptedPayload(payload);
   try {
-    const key = await deriveVaultKey(normalizedPassphrase, fromBase64(normalizedPayload.salt), safeCrypto);
+    const key = await deriveVaultKey(
+      normalizedPassphrase,
+      fromBase64(normalizedPayload.salt),
+      resolveKdfParams(normalizedPayload.kdf),
+      safeCrypto
+    );
     const decrypted = await safeCrypto.subtle.decrypt(
       { name: "AES-GCM", iv: fromBase64(normalizedPayload.iv) },
       key,
@@ -514,6 +603,7 @@ var STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
 var ENCRYPTED_VAULT_KEY = "personal_otp_vault_encrypted_v1";
+var UPGRADE_SENTINEL_KEY = "personal_otp_vault_legacy_upgrade_hash";
 var form = document.getElementById("otp-form");
 var labelInput = document.getElementById("label");
 var secretInput = document.getElementById("secret");
@@ -627,6 +717,7 @@ var settings = loadSettings();
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var currentPassphrase = "";
+var staleVaultTab = false;
 var cameraStream = null;
 var cameraScanTimer = null;
 var deferredInstallPrompt = null;
@@ -741,6 +832,24 @@ function setChangePassphraseStatus(message, tone = "") {
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
 }
+function renderPassphraseStrength(input, meterRoot) {
+  if (!input || !meterRoot) return;
+  const assessment = assessPassphraseStrength(input.value);
+  meterRoot.classList.toggle("hidden", input.value.length === 0);
+  const fill = meterRoot.querySelector(".strength-fill");
+  if (fill) fill.dataset.score = String(assessment.score);
+  const label = meterRoot.querySelector(".strength-label");
+  if (label) label.textContent = assessment.label;
+  const warnings = meterRoot.querySelector(".strength-warnings");
+  if (warnings) warnings.textContent = assessment.warnings.join(" ");
+}
+function bindPassphraseStrengthMeters() {
+  const unlockMeter = document.getElementById("unlock-passphrase-strength");
+  const setMeter = document.getElementById("set-passphrase-strength");
+  unlockPassphraseInput?.addEventListener("input", () => renderPassphraseStrength(unlockPassphraseInput, unlockMeter));
+  vaultPassphraseInput?.addEventListener("input", () => renderPassphraseStrength(vaultPassphraseInput, setMeter));
+  vaultPassphraseConfirmInput?.addEventListener("input", () => renderPassphraseStrength(vaultPassphraseConfirmInput, setMeter));
+}
 function logDebug(level, message, detail = "") {
   debugEvents = [{
     level,
@@ -788,6 +897,21 @@ function setLocked(locked) {
   sortSelect.disabled = locked;
   groupSelect.disabled = locked;
   changePassphraseBtn?.classList.toggle("hidden", locked || !settings.persist || !settings.encrypt);
+}
+function markVaultStale() {
+  if (staleVaultTab || !settings.persist) return;
+  staleVaultTab = true;
+  document.getElementById("vault-stale-banner")?.classList.remove("hidden");
+}
+function bindMultiTabGuard() {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY) return;
+    if (event.newValue === event.oldValue) return;
+    markVaultStale();
+  });
+  const banner = document.getElementById("vault-stale-banner");
+  banner?.querySelector("#vault-stale-reload")?.addEventListener("click", () => window.location.reload());
+  banner?.querySelector("#vault-stale-dismiss")?.addEventListener("click", () => banner.classList.add("hidden"));
 }
 function loadPlainEntries() {
   try {
@@ -1214,18 +1338,19 @@ async function saveEncryptedEntries(payloadEntries, passphrase) {
   localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(encryptedPayload));
   return encryptedPayload;
 }
-async function decryptStoredEntries(passphrase) {
+async function readEncryptedVaultPayload() {
   const raw = localStorage.getItem(ENCRYPTED_VAULT_KEY);
-  if (!raw) return [];
-  let payload;
+  if (!raw) return null;
   try {
-    payload = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch (error) {
     throw new Error("Encrypted data is unreadable", { cause: error });
   }
-  return decryptVaultEntries(payload, passphrase);
 }
 async function persistEntries() {
+  if (staleVaultTab) {
+    throw new Error("Vault changed in another tab \u2014 reload this tab to make changes");
+  }
   const previousArtifacts = snapshotPersistedVaultArtifacts();
   try {
     if (!settings.persist) {
@@ -1419,12 +1544,29 @@ async function importFromQrBlob(blob, sourceLabel) {
 }
 async function unlockVault(passphrase) {
   const normalizedPassphrase = normalizePassphrase(passphrase);
-  const decrypted = await decryptStoredEntries(normalizedPassphrase);
+  const payload = await readEncryptedVaultPayload();
+  const decrypted = payload ? await decryptVaultEntries(payload, normalizedPassphrase) : [];
   currentPassphrase = normalizedPassphrase;
   entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
   setLocked(false);
   renderEntries();
   await tick();
+  await upgradeLegacyEncryptedVault(payload);
+}
+async function hashPayloadString(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+async function upgradeLegacyEncryptedVault(payload) {
+  if (!payload || !isLegacyEncryptedPayload(payload)) return;
+  const payloadHash = await hashPayloadString(JSON.stringify(payload));
+  if (sessionStorage.getItem(UPGRADE_SENTINEL_KEY) === payloadHash) return;
+  try {
+    await persistEntries();
+    sessionStorage.setItem(UPGRADE_SENTINEL_KEY, payloadHash);
+  } catch (error) {
+    reportError("Legacy vault upgrade failed", error);
+  }
 }
 async function handleSaveSettings() {
   if (persistToggle.checked && encryptToggle.checked) {
@@ -1724,6 +1866,8 @@ function registerPwaSupport() {
   window.addEventListener("offline", renderConnectionState);
 }
 function bindEvents() {
+  bindMultiTabGuard();
+  bindPassphraseStrengthMeters();
   document.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
     if (event.key === "/") {
