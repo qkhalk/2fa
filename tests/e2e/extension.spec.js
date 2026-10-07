@@ -11,6 +11,7 @@ test("extension popup supports adding and filtering OTP entries", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -69,6 +70,7 @@ test("extension popup supports encryption, unlock, and copy history", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -113,6 +115,7 @@ test("extension copy history keeps deduped recent labels while rapidly switching
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -159,6 +162,7 @@ test("extension keeps encryption controls unchanged when encrypted save fails", 
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -208,6 +212,7 @@ test("extension restores vault artifacts when encrypted save cleanup fails", asy
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -270,6 +275,7 @@ test("extension keeps failed-save security state stable after popup reopen and p
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -347,6 +353,7 @@ test("extension persists encrypted vault and unlocks after popup reopen", async 
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -399,6 +406,7 @@ test("extension stays locked across repeated wrong unlock attempts before succes
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -458,6 +466,7 @@ test("extension keeps entries hidden and resets failed-unlock messaging after po
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -520,6 +529,7 @@ test("extension clears partial unlock input after popup reopen while staying loc
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -581,6 +591,7 @@ test("extension shows clean unlock status after multiple failed attempts and pop
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -648,6 +659,7 @@ test("extension keeps locked view free of stale success message after relock and
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -712,6 +724,7 @@ test("extension keeps locked state and clears stale failed-unlock error after po
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -771,6 +784,7 @@ test("extension preserves unlock continuity across wrong-then-correct attempt an
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -840,6 +854,7 @@ test("extension removes individual entries with destructive actions", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -890,6 +905,7 @@ test("extension preserves entries when encrypted entry removal persistence fails
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -939,6 +955,7 @@ test("extension security form must not silently change active passphrase", async
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -990,6 +1007,7 @@ test("extension encrypted vault hides primary passphrase fields after setup", as
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1029,6 +1047,7 @@ test("extension dedicated passphrase change updates unlock passphrase", async ()
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1082,6 +1101,7 @@ test("extension copy history renders labels as text instead of HTML", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1114,6 +1134,7 @@ test("extension remove requires confirmation", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1150,6 +1171,7 @@ test("extension throttles unlock attempts with backoff and recovers", async () =
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1224,6 +1246,7 @@ test("extension undo survives popup close and reopen via the tombstone", async (
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1269,6 +1292,7 @@ test("extension exports a backup and stamps the reminder", async () => {
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -1305,6 +1329,7 @@ test("extension time drift check warns on a skewed mocked server clock", async (
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: "chromium",
     headless: true,
+    colorScheme: "dark",
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,

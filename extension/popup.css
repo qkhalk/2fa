@@ -8,6 +8,20 @@
   --accent: #ff6f3c;
   --accent-2: #ffa36a;
   --danger: #ff7e7e;
+  --panel-grad-from: rgba(17, 21, 31, 0.96);
+  --panel-grad-to: rgba(11, 13, 19, 0.98);
+  --on-accent: #1a0e07;
+  --danger-text: #ffc7c3;
+  --success-text: #a5f6e3;
+  --initials-text: #fff3ea;
+  --shadow-panel: 0 12px 28px rgba(0, 0, 0, 0.24);
+  --white-12: rgba(255, 255, 255, 0.12);
+  --white-18: rgba(255, 255, 255, 0.18);
+  --field-bg: rgba(8, 17, 31, 0.95);
+  --track-bg: #08111f;
+  --focus-ring: rgba(49, 208, 170, 0.3);
+  --history-empty-bg: rgba(17, 27, 48, 0.55);
+  --history-item-bg: rgba(5, 10, 20, 0.7);
 }
 
 * {
@@ -36,8 +50,8 @@ body {
 .entry-card {
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(17, 21, 31, 0.96), rgba(11, 13, 19, 0.98));
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  background: linear-gradient(180deg, var(--panel-grad-from), var(--panel-grad-to));
+  box-shadow: var(--shadow-panel);
 }
 
 .panel {
@@ -113,7 +127,7 @@ h2 {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: #08111f;
+  background: var(--track-bg);
   border: 1px solid var(--line);
 }
 
@@ -154,14 +168,14 @@ select {
   margin-top: 8px;
   border-radius: 12px;
   border: 1px solid var(--line);
-  background: rgba(8, 17, 31, 0.95);
+  background: var(--field-bg);
   color: var(--text);
   padding: 10px 12px;
 }
 
 input:focus,
 select:focus {
-  outline: 2px solid rgba(49, 208, 170, 0.3);
+  outline: 2px solid var(--focus-ring);
   border-color: var(--accent);
 }
 
@@ -191,7 +205,7 @@ select:focus {
   margin-top: 10px;
   padding: 10px 12px;
   background: linear-gradient(120deg, var(--accent), var(--accent-2));
-  color: #1a0e07;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -229,11 +243,11 @@ select:focus {
 }
 
 .status.error {
-  color: #ffc3c3;
+  color: var(--danger-text);
 }
 
 .status.success {
-  color: #a5f6e3;
+  color: var(--success-text);
 }
 
 .hidden {
@@ -311,7 +325,7 @@ select:focus {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  color: #fff3ea;
+  color: var(--initials-text);
   font-weight: 700;
   letter-spacing: 0.06em;
   background: linear-gradient(145deg, rgba(255, 111, 60, 0.26), rgba(255, 201, 140, 0.12));
@@ -363,7 +377,7 @@ select:focus {
   font-size: 13px;
   border-radius: 10px;
   background: linear-gradient(120deg, var(--accent), var(--accent-2));
-  color: #1a0e07;
+  color: var(--on-accent);
   font-weight: 700;
   border: 1px solid transparent;
   white-space: nowrap;
@@ -411,7 +425,7 @@ select:focus {
   border: 1px dashed var(--line);
   border-radius: 16px;
   color: var(--muted);
-  background: rgba(17, 27, 48, 0.55);
+  background: var(--history-empty-bg);
 }
 
 .history-list {
@@ -448,7 +462,7 @@ select:focus {
 }
 
 .hidden-dialog::backdrop {
-  background: rgba(5, 10, 20, 0.7);
+  background: var(--history-item-bg);
 }
 
 .collapsed #entry-form {
@@ -474,7 +488,7 @@ select:focus {
 .passphrase-strength .strength-track {
   height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--white-12);
   overflow: hidden;
 }
 .passphrase-strength .strength-fill {
@@ -519,7 +533,7 @@ select:focus {
   font-family: Consolas, "Courier New", monospace;
   font-size: 10px;
   color: var(--accent, #ff6f3c);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--white-18);
   border-radius: 999px;
   padding: 1px 6px;
   white-space: nowrap;
@@ -549,4 +563,110 @@ select:focus {
 }
 .drift-banner.hidden {
   display: none;
+}
+
+/* --- Light theme (Phase 7): explicit toggle + system-follow. The :root
+   values above are the original dark look, so the default is unchanged. */
+:root[data-theme="light"] {
+  --bg: #f4f2ee;
+  --panel: #ffffff;
+  --panel-2: #faf8f4;
+  --line: rgba(38, 34, 28, 0.14);
+  --text: #26221c;
+  --muted: #6d675e;
+  --accent: #d9541c;
+  --accent-2: #b54512;
+  --danger: #c33c3c;
+  --panel-grad-from: rgba(255, 255, 255, 0.98);
+  --panel-grad-to: rgba(248, 246, 242, 0.98);
+  --on-accent: #fff6f0;
+  --danger-text: #a02f2f;
+  --success-text: #17603c;
+  --initials-text: #5a2b14;
+  --shadow-panel: 0 10px 22px rgba(46, 38, 26, 0.14);
+  --white-12: rgba(38, 34, 28, 0.14);
+  --white-18: rgba(38, 34, 28, 0.2);
+  --field-bg: rgba(255, 255, 255, 0.98);
+  --track-bg: rgba(38, 34, 28, 0.12);
+  --focus-ring: rgba(217, 84, 28, 0.45);
+  --history-empty-bg: rgba(38, 34, 28, 0.08);
+  --history-item-bg: rgba(255, 255, 255, 0.92);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f2ee;
+    --panel: #ffffff;
+    --panel-2: #faf8f4;
+    --line: rgba(38, 34, 28, 0.14);
+    --text: #26221c;
+    --muted: #6d675e;
+    --accent: #d9541c;
+    --accent-2: #b54512;
+    --danger: #c33c3c;
+    --panel-grad-from: rgba(255, 255, 255, 0.98);
+    --panel-grad-to: rgba(248, 246, 242, 0.98);
+    --on-accent: #fff6f0;
+    --danger-text: #a02f2f;
+    --success-text: #17603c;
+    --initials-text: #5a2b14;
+    --shadow-panel: 0 10px 22px rgba(46, 38, 26, 0.14);
+    --white-12: rgba(38, 34, 28, 0.14);
+    --white-18: rgba(38, 34, 28, 0.2);
+    --field-bg: rgba(255, 255, 255, 0.98);
+    --track-bg: rgba(38, 34, 28, 0.12);
+    --focus-ring: rgba(217, 84, 28, 0.45);
+    --history-empty-bg: rgba(38, 34, 28, 0.08);
+    --history-item-bg: rgba(255, 255, 255, 0.92);
+  }
+}
+
+/* Countdown ring (Phase 7) */
+.entry-ring {
+  width: 26px;
+  height: 26px;
+  transform: rotate(-90deg);
+  flex: none;
+}
+.entry-ring circle {
+  fill: none;
+  stroke-width: 3;
+}
+.entry-ring .ring-track {
+  stroke: var(--line);
+}
+.entry-ring .ring-progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.95s linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .entry-ring {
+    display: none;
+  }
+}
+
+/* Drag & drop handle (Phase 7) */
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 2px;
+  line-height: 1;
+}
+.drag-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.entry-card.dragging {
+  opacity: 0.55;
+}
+.entry-card.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+body.dragging-entry {
+  user-select: none;
 }

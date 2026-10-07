@@ -9,6 +9,9 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
     baseURL: "http://127.0.0.1:4173",
     serviceWorkers: "block",
+    // The app's default look is the dark theme; pin dark so only tests that
+    // opt into light (emulateMedia / data-theme) see the light tokens.
+    colorScheme: "dark",
     trace: "retain-on-failure",
   },
   webServer: {
