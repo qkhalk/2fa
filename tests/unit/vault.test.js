@@ -1,12 +1,41 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assessPassphraseStrength,
   createEncryptedBackup,
   createPlainBackup,
   decryptVaultEntries,
   encryptEntries,
+  isLegacyEncryptedPayload,
+  KDF_PARAMS_DEFAULT,
   parseBackupFile,
 } from "../../lib/vault.js";
+
+const encoder = new TextEncoder();
+
+function toBase64String(uint8) {
+  return btoa(String.fromCharCode(...uint8));
+}
+
+// Builds a pre-0.1.2 {salt, iv, data} envelope at the legacy 150k work factor.
+async function encryptWithLegacyParams(entries, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey("raw", encoder.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 150000, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoder.encode(JSON.stringify(entries)));
+  return {
+    salt: toBase64String(salt),
+    iv: toBase64String(iv),
+    data: toBase64String(new Uint8Array(encrypted)),
+  };
+}
 
 describe("vault helpers", () => {
   const entries = [
@@ -43,6 +72,80 @@ describe("vault helpers", () => {
     await expect(decryptVaultEntries(payload, "wrong passphrase")).rejects.toThrow(
       "Incorrect passphrase or unreadable encrypted data"
     );
+  });
+
+  it("writes kdf params into new envelopes at the 600k default", async () => {
+    const payload = await encryptEntries(entries, "correct horse battery");
+
+    expect(payload.kdf).toEqual({ ...KDF_PARAMS_DEFAULT });
+    expect(payload.kdf.iterations).toBe(600000);
+  });
+
+  it("decrypts legacy {salt, iv, data} envelopes at the 150k work factor", async () => {
+    const legacyPayload = await encryptWithLegacyParams(entries, "correct horse battery");
+
+    expect(legacyPayload.kdf).toBeUndefined();
+    const decrypted = await decryptVaultEntries(legacyPayload, "correct horse battery");
+
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+    expect(isLegacyEncryptedPayload(legacyPayload)).toBe(true);
+  });
+
+  it("treats a sub-floor kdf as legacy instead of honoring it", async () => {
+    const legacyPayload = await encryptWithLegacyParams(entries, "correct horse battery");
+    const tampered = { ...legacyPayload, kdf: { algorithm: "PBKDF2", iterations: 1000, hash: "SHA-256", saltBytes: 16 } };
+
+    expect(isLegacyEncryptedPayload(tampered)).toBe(true);
+    // Decrypting via the legacy work factor succeeds — proof the tampered
+    // 1000-iteration value was never used for derivation.
+    const decrypted = await decryptVaultEntries(tampered, "correct horse battery");
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects malformed kdf blocks with VAULT_FIELDS", async () => {
+    const base = await encryptEntries(entries, "correct horse battery");
+    const malformedCases = [
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: -1, hash: "SHA-256" } },
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: "600000", hash: "SHA-256" } },
+      { ...base, kdf: { algorithm: "PBKDF2", iterations: 600000, hash: "MD5" } },
+      { ...base, kdf: { algorithm: "ARGON2", iterations: 600000, hash: "SHA-256" } },
+      { ...base, kdf: "600000" },
+    ];
+
+    for (const payload of malformedCases) {
+      await expect(decryptVaultEntries(payload, "correct horse battery")).rejects.toMatchObject({
+        code: "VAULT_FIELDS",
+      });
+    }
+  });
+
+  it("flags isLegacyEncryptedPayload for missing and sub-floor kdf only", async () => {
+    expect(isLegacyEncryptedPayload(null)).toBe(false);
+    expect(isLegacyEncryptedPayload({ salt: "a", iv: "b", data: "c" })).toBe(true);
+    expect(isLegacyEncryptedPayload({ salt: "a", iv: "b", data: "c", kdf: { iterations: 149999 } })).toBe(true);
+    const payload = await encryptEntries(entries, "correct horse battery");
+    expect(isLegacyEncryptedPayload(payload)).toBe(false);
+  });
+
+  it("scores passphrase strength across the advisory scale", () => {
+    expect(assessPassphraseStrength("")).toEqual({ score: 0, label: "Very weak", warnings: ["Enter a passphrase"] });
+    expect(assessPassphraseStrength("short").score).toBeLessThanOrEqual(1);
+
+    const weak = assessPassphraseStrength("password123");
+    expect(weak.score).toBeLessThanOrEqual(1);
+    expect(weak.warnings).toContain("Avoid common words and patterns");
+
+    const fair = assessPassphraseStrength("qwertyuiop"); // 10 chars, one class, common pattern
+    expect(fair.score).toBeLessThanOrEqual(1);
+
+    const good = assessPassphraseStrength("CorrectHorse42"); // 14 chars, 3 classes
+    expect(good.score).toBe(3);
+    expect(good.label).toBe("Good");
+
+    const strong = assessPassphraseStrength("Correct-Horse-Battery-42!");
+    expect(strong.score).toBe(4);
+    expect(strong.label).toBe("Strong");
+    expect(strong.warnings).toEqual([]);
   });
 
   it("parses plain backups", async () => {

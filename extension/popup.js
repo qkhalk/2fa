@@ -13,8 +13,10 @@ import {
   toUserMessage,
 } from "../lib/otp.js";
 import {
+  assessPassphraseStrength,
   decryptVaultEntries,
   encryptEntries,
+  isLegacyEncryptedPayload,
   normalizePassphrase,
 } from "../lib/vault.js";
 
@@ -102,6 +104,7 @@ async function initialize() {
   }
 
   bindEvents();
+  bindPassphraseStrengthMeters();
   renderEntries();
   renderCopyHistory();
   tick();
@@ -129,6 +132,26 @@ function setMainStatus(message, tone = "") {
 
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
+}
+
+function renderPassphraseStrength(input, meterRoot) {
+  if (!input || !meterRoot) return;
+  const assessment = assessPassphraseStrength(input.value);
+  meterRoot.classList.toggle("hidden", input.value.length === 0);
+  const fill = meterRoot.querySelector(".strength-fill");
+  if (fill) fill.dataset.score = String(assessment.score);
+  const label = meterRoot.querySelector(".strength-label");
+  if (label) label.textContent = assessment.label;
+  const warnings = meterRoot.querySelector(".strength-warnings");
+  if (warnings) warnings.textContent = assessment.warnings.join(" ");
+}
+
+function bindPassphraseStrengthMeters() {
+  const unlockMeter = document.getElementById("unlock-passphrase-strength");
+  const setMeter = document.getElementById("set-passphrase-strength");
+  unlockPassphraseInput?.addEventListener("input", () => renderPassphraseStrength(unlockPassphraseInput, unlockMeter));
+  passphraseInput?.addEventListener("input", () => renderPassphraseStrength(passphraseInput, setMeter));
+  passphraseConfirmInput?.addEventListener("input", () => renderPassphraseStrength(passphraseConfirmInput, setMeter));
 }
 
 async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
@@ -694,6 +717,11 @@ function bindEvents() {
       const decrypted = await decryptVaultEntries(stored[ENCRYPTED_KEY], unlockPassphraseInput.value);
       entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
       currentPassphrase = normalizePassphrase(unlockPassphraseInput.value);
+      // Legacy (pre-600k) envelopes re-encrypt at the current default right
+      // after a successful unlock; failure leaves the old envelope intact.
+      if (isLegacyEncryptedPayload(stored[ENCRYPTED_KEY])) {
+        await persistEntries();
+      }
       unlockPassphraseInput.value = "";
       setLocked(false);
       renderEntries();

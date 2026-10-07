@@ -18,10 +18,12 @@ import {
   toUserMessage,
 } from './lib/otp.js';
 import {
+  assessPassphraseStrength,
   createEncryptedBackup,
   createPlainBackup,
   decryptVaultEntries,
   encryptEntries,
+  isLegacyEncryptedPayload,
   normalizePassphrase,
   parseBackupFile,
 } from './lib/vault.js';
@@ -31,6 +33,7 @@ var STORAGE_KEY = "personal_otp_vault_entries_v2";
 var SETTINGS_KEY = "personal_otp_vault_settings_v3";
 var WARNING_KEY = "personal_otp_vault_persist_warning_seen_v1";
 var ENCRYPTED_VAULT_KEY = "personal_otp_vault_encrypted_v1";
+var UPGRADE_SENTINEL_KEY = "personal_otp_vault_legacy_upgrade_hash";
 var form = document.getElementById("otp-form");
 var labelInput = document.getElementById("label");
 var secretInput = document.getElementById("secret");
@@ -144,6 +147,7 @@ var settings = loadSettings();
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var currentPassphrase = "";
+var staleVaultTab = false;
 var cameraStream = null;
 var cameraScanTimer = null;
 var deferredInstallPrompt = null;
@@ -261,6 +265,24 @@ function setChangePassphraseStatus(message, tone = "") {
 function setUnlockStatus(message, tone = "") {
   setStatus(unlockStatus, message, tone);
 }
+function renderPassphraseStrength(input, meterRoot) {
+  if (!input || !meterRoot) return;
+  const assessment = assessPassphraseStrength(input.value);
+  meterRoot.classList.toggle("hidden", input.value.length === 0);
+  const fill = meterRoot.querySelector(".strength-fill");
+  if (fill) fill.dataset.score = String(assessment.score);
+  const label = meterRoot.querySelector(".strength-label");
+  if (label) label.textContent = assessment.label;
+  const warnings = meterRoot.querySelector(".strength-warnings");
+  if (warnings) warnings.textContent = assessment.warnings.join(" ");
+}
+function bindPassphraseStrengthMeters() {
+  const unlockMeter = document.getElementById("unlock-passphrase-strength");
+  const setMeter = document.getElementById("set-passphrase-strength");
+  unlockPassphraseInput?.addEventListener("input", () => renderPassphraseStrength(unlockPassphraseInput, unlockMeter));
+  vaultPassphraseInput?.addEventListener("input", () => renderPassphraseStrength(vaultPassphraseInput, setMeter));
+  vaultPassphraseConfirmInput?.addEventListener("input", () => renderPassphraseStrength(vaultPassphraseConfirmInput, setMeter));
+}
 function logDebug(level, message, detail = "") {
   debugEvents = [{
     level,
@@ -308,6 +330,21 @@ function setLocked(locked) {
   sortSelect.disabled = locked;
   groupSelect.disabled = locked;
   changePassphraseBtn?.classList.toggle("hidden", locked || !settings.persist || !settings.encrypt);
+}
+function markVaultStale() {
+  if (staleVaultTab || !settings.persist) return;
+  staleVaultTab = true;
+  document.getElementById("vault-stale-banner")?.classList.remove("hidden");
+}
+function bindMultiTabGuard() {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== ENCRYPTED_VAULT_KEY && event.key !== STORAGE_KEY) return;
+    if (event.newValue === event.oldValue) return;
+    markVaultStale();
+  });
+  const banner = document.getElementById("vault-stale-banner");
+  banner?.querySelector("#vault-stale-reload")?.addEventListener("click", () => window.location.reload());
+  banner?.querySelector("#vault-stale-dismiss")?.addEventListener("click", () => banner.classList.add("hidden"));
 }
 function loadPlainEntries() {
   try {
@@ -742,18 +779,24 @@ async function saveEncryptedEntries(payloadEntries, passphrase) {
   localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(encryptedPayload));
   return encryptedPayload;
 }
-async function decryptStoredEntries(passphrase) {
+async function readEncryptedVaultPayload() {
   const raw = localStorage.getItem(ENCRYPTED_VAULT_KEY);
-  if (!raw) return [];
-  let payload;
+  if (!raw) return null;
   try {
-    payload = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch (error) {
     throw new Error("Encrypted data is unreadable", { cause: error });
   }
+}
+async function decryptStoredEntries(passphrase) {
+  const payload = await readEncryptedVaultPayload();
+  if (!payload) return [];
   return decryptVaultEntries(payload, passphrase);
 }
 async function persistEntries() {
+  if (staleVaultTab) {
+    throw new Error("Vault changed in another tab — reload this tab to make changes");
+  }
   const previousArtifacts = snapshotPersistedVaultArtifacts();
   try {
     if (!settings.persist) {
@@ -969,12 +1012,32 @@ async function importFromQrBlob(blob, sourceLabel) {
 }
 async function unlockVault(passphrase) {
   const normalizedPassphrase = normalizePassphrase(passphrase);
-  const decrypted = await decryptStoredEntries(normalizedPassphrase);
+  const payload = await readEncryptedVaultPayload();
+  const decrypted = payload ? await decryptVaultEntries(payload, normalizedPassphrase) : [];
   currentPassphrase = normalizedPassphrase;
   entries = decrypted.every((entry) => !entry.order) ? resequenceEntries(decrypted) : decrypted;
   setLocked(false);
   renderEntries();
   await tick();
+  await upgradeLegacyEncryptedVault(payload);
+}
+async function hashPayloadString(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+// Re-encrypts legacy (or tampered sub-floor) envelopes at the current default
+// work factor right after a successful unlock. Fires at most once per payload
+// hash so concurrent tabs do not stampede re-encrypts (FR3/FR8).
+async function upgradeLegacyEncryptedVault(payload) {
+  if (!payload || !isLegacyEncryptedPayload(payload)) return;
+  const payloadHash = await hashPayloadString(JSON.stringify(payload));
+  if (sessionStorage.getItem(UPGRADE_SENTINEL_KEY) === payloadHash) return;
+  try {
+    await persistEntries();
+    sessionStorage.setItem(UPGRADE_SENTINEL_KEY, payloadHash);
+  } catch (error) {
+    reportError("Legacy vault upgrade failed", error);
+  }
 }
 async function handleSaveSettings() {
   if (persistToggle.checked && encryptToggle.checked) {
@@ -1279,6 +1342,8 @@ function registerPwaSupport() {
   window.addEventListener("offline", renderConnectionState);
 }
 function bindEvents() {
+  bindMultiTabGuard();
+  bindPassphraseStrengthMeters();
   document.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
     if (event.key === "/") {
