@@ -86,12 +86,42 @@ The encryption system uses a multi-stage pipeline to derive keys and protect vau
 
 ### Key Derivation (PBKDF2)
 ```javascript
-// lib/vault.js - PBKDF2 parameters
-PBKDF2 iterations: 150,000
+// lib/vault.js - PBKDF2 parameters (Phase 1 envelope)
+Default iterations: 600,000 (KDF_PARAMS_DEFAULT)
+Legacy floor iterations: 150,000 (KDF_PARAMS_LEGACY)
 Hash algorithm: SHA-256
 Salt length: 16 bytes (random)
 Output key length: 256 bits (32 bytes)
 ```
+
+The PBKDF2 parameters are stored INSIDE the encrypted envelope's `kdf` block
+(`{algorithm, iterations, hash, saltBytes}`), so parameters can evolve without
+a format break. A sub-floor `kdf` block is treated as legacy and silently
+re-encrypted at the current default right after a successful unlock (once per
+payload hash, guarded by a sessionStorage sentinel so concurrent tabs do not
+stampede). Consequence: vaults re-encrypted after 0.1.2 cannot be read by
+older app versions.
+
+### DEK Two-Envelope Mode (biometric unlock, Phase 6)
+When biometric unlock is enrolled, the vault switches to a two-envelope
+design. Vault data is encrypted under a random 256-bit Data Encryption Key
+(DEK). The DEK is wrapped twice: once under the passphrase-derived key (the
+envelope's `dek: {wrapped, iv}` block, recovery) and once under an HKDF-SHA256
+KEK derived from the WebAuthn PRF output (stored wrapped in a separate
+biometric record: `{credentialId, prfSalt, wrappedDek, wrappedIv}`). The
+envelope carries the `kdf.mode: "dek-v1"` marker so pre-0.1.5 code reports a
+clear "newer format" error instead of a misleading passphrase error.
+
+Key properties:
+- The passphrase path always remains: it unwraps the DEK from the envelope
+  and decrypts the data, with or without the authenticator.
+- Mutations re-encrypt the data under the held DEK (stable salt and wraps).
+- Backup export always re-encrypts under the passphrase key into the standard
+  envelope (no `dek` block), so backups restore by passphrase alone on any
+  version. Only a LIVE biometric-mode vault requires 0.1.5+ code.
+- Enrollment is a two-store write (envelope first, biometric record second);
+  an orphaned record with no `dek` block is deleted at unlock (self-healing).
+- PRF output, KEK, DEK, and passphrases are never persisted or logged.
 
 ### Encryption Process
 ```mermaid
@@ -337,38 +367,58 @@ graph LR
 All storage keys follow the pattern: `{prefix}_{name}_v{version}`
 
 ### Root App Key Evolution
-`personal_otp_vault_settings_v3` is current; earlier settings generations were
-superseded without a preserved migration record in the current code. There is no
-v1 entries key in the implementation history — `personal_otp_vault_entries_v2`
-is the entries key used by `app.js`.
+`personal_otp_vault_entries_v3` is the current entries key (Phase 3). The v3
+store is authoritative; the legacy v2 key is retained read-only and only
+consulted while v3 is absent (first load after the upgrade), so entries deleted
+after migration cannot resurrect from v2.
 ```
-personal_otp_vault_entries_v2 (current)
+personal_otp_vault_entries_v3 (current)
+personal_otp_vault_entries_v2 (legacy, read-only fallback)
 
-personal_otp_vault_encrypted_v1 (current)
+personal_otp_vault_encrypted_v1 (current; gains `kdf.mode: "dek-v1"` + `dek` block in biometric mode)
 
-personal_otp_vault_settings_v3 (current)
+personal_otp_vault_settings_v3 (current; now also carries autoLockMinutes, timeDriftCheck, lastBackupAt/Hast, theme)
+
+personal_otp_vault_biometric_v1 (biometric record: credentialId, prfSalt, wrappedDek, wrappedIv — non-secrets only)
+personal_otp_vault_undo_tombstone_v1 (10-minute undo tombstone; encrypted when the vault is)
+personal_otp_vault_unlock_guard_v1 (unlock throttling: attempts + lockedUntil)
+personal_otp_vault_legacy_upgrade_hash (sessionStorage sentinel for the legacy re-encrypt)
 ```
 
 ### Extension Key Evolution
-`otp_extension_entries_v2` is current; `otp_extension_entries_v1` was its
-predecessor in the implementation history. The encrypted, settings, and UI keys
-have no prior generations in the current history.
+`otp_extension_entries_v3` is current with the same v3-authoritative/v2-fallback
+semantics as the root app.
 ```
+otp_extension_entries_v3 (current)
+otp_extension_entries_v2 (legacy, read-only fallback)
 otp_extension_entries_v1 (deprecated)
-otp_extension_entries_v2 (current)
 
 otp_extension_encrypted_v1 (current)
 
 otp_extension_settings_v1 (current)
 otp_extension_ui_v1 (current)
+otp_extension_biometric_v1 (biometric record)
+otp_extension_undo_tombstone_v1 (undo tombstone)
+otp_extension_unlock_guard_v1 (unlock throttling)
+otp_extension_session_unlock_v1 (chrome.storage.session cache: passphrase + CryptoKey handle, cleared on lock/idle/browser exit)
 ```
+
+### Entry Schema v3
+Entries carry `type` (`"totp"` | `"hotp"`), `algorithm` (`SHA1` | `SHA256` |
+`SHA512`), `counter` (HOTP, incremented on reveal/copy), `order` (manual
+reorder position), plus the existing id/label/secret/tags/digits/period/
+pinned/createdAt fields. Pre-v3 entries migrate on first load; HOTP entries in
+backups degrade to TOTP when restored into pre-0.1.3 versions.
 
 ## Extension Service Worker
 
 ### Background Script Role
-See `extension/background.js` for the owning implementation: it is a minimal
-MV3 service worker that only registers an `onInstalled` listener. It performs
-no storage operations and handles no popup messages.
+See `extension/background.js` for the owning implementation: a minimal MV3
+service worker that schedules an auto-lock alarm from the stored settings and
+clears the `chrome.storage.session` unlock cache when the browser goes idle or
+the alarm fires. The popup talks to storage directly via
+`chrome.storage.local`/`chrome.storage.session`; there is no
+popup-to-background message-passing layer.
 
 The popup talks to storage directly via `chrome.storage.local` (see
 `initialize`/`persistEntries` in `extension/popup.js`); there is no

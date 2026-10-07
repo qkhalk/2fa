@@ -7,13 +7,17 @@ Last updated: 2026-10-06
 ```
 2fa/
 ├── index.html              # Root PWA app entry point
-├── app.js                  # Main browser app (~2000 lines)
+├── app.js                  # Main browser app (~2500 lines)
 ├── styles.css              # App styles
 ├── sw.js                   # Service worker for offline/PWA support
 ├── manifest.webmanifest   # PWA manifest
 ├── lib/
-│   ├── otp.js             # TOTP domain logic (generation, parsing, validation)
-│   └── vault.js           # Encryption (PBKDF2 + AES-GCM) and backup logic
+│   ├── otp.js             # TOTP/HOTP engine, otpauth parsing, reorder math
+│   ├── vault.js           # KDF envelope + DEK mode (PBKDF2 + AES-GCM), backups
+│   ├── migration.js       # Google Authenticator otpauth-migration decoder
+│   ├── biometric.js       # WebAuthn PRF ceremonies, KEK derivation, DEK wrap
+│   └── i18n.js            # String catalog framework (English seed)
+├── fonts/                 # Vendored woff2 fonts (no third-party origins)
 ├── extension/
 │   ├── popup.js           # Extension popup entry point
 │   ├── popup.html         # Extension popup UI
@@ -35,8 +39,13 @@ Last updated: 2026-10-06
 │       ├── extension.spec.js      # Extension popup flows
 │       ├── offline.spec.js        # PWA offline testing
 │       ├── app-destructive-backup.spec.js # Backup safety tests
-│       ├── web-visual.spec.js      # Visual regression (web)
-│       └── extension-visual.spec.js # Visual regression (extension)
+│       ├── autolock.spec.js       # Auto-lock and unlock throttling
+│       ├── data-safety.spec.js    # Undo delete, backup reminder, time drift
+│       ├── biometric.spec.js      # WebAuthn PRF unlock flows (fake authenticator)
+│       ├── polish.spec.js         # Dark mode, drag & drop, ring, axe a11y scan
+│       ├── ga-import.spec.js      # Google Authenticator migration import
+│       ├── web-visual.spec.js      # Visual regression (web, light + dark)
+│       └── extension-visual.spec.js # Visual regression (extension, light + dark)
 ├── docs/                  # Documentation
 ├── icons/                 # PWA icons (generated from icon.svg)
 ├── icon.svg               # Single source of truth for branding

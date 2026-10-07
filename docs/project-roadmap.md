@@ -2,25 +2,37 @@
 
 Last updated: 2026-06-27
 
-## Current Status: Version 0.1.1
+## Current Status: Version 0.2.0
 
-The Personal OTP Vault is currently in stable beta (v0.1.1) with core functionality fully implemented for both the Progressive Web App and Chrome Extension. The project focuses on reliability, security, and cross-platform parity.
+The Personal OTP Vault is at v0.2.0 with the hardening wave shipped: KDF
+parameterization (600k PBKDF2 envelope), auto-lock and unlock throttling,
+HOTP + SHA-256/512 support, Google Authenticator migration import, undo-delete
+with tombstone, backup reminder, time-drift check, WebAuthn PRF biometric
+unlock (two-envelope DEK design), dark mode, drag & drop reorder, per-entry
+countdown rings, an accessibility pass, and an i18n framework — in both the
+PWA and the Chrome extension.
 
 ## Completed Features (Done)
 
 ### Core Functionality
-- ✅ **TOTP Generation**: RFC 6238 compliant TOTP with HMAC-SHA1
+- ✅ **TOTP + HOTP Generation**: RFC 6238/4226 compliant, HMAC-SHA1/256/512, 6-8 digits, 15-120s periods
+- ✅ **HOTP Counter Semantics**: Counter increments on reveal/copy; entries v3 storage with read-only v2 fallback
 - ✅ **Multiple Import Methods**: Manual entry, clipboard, QR file/URL, camera scan, bulk URI import
-- ✅ **Entry Management**: Search, grouping, sorting, tags, bulk operations, pinning
-- ✅ **Encrypted Storage**: Optional PBKDF2 + AES-256-GCM vault encryption
-- ✅ **Backup System**: Export/import with versioned format (v2) and checksum validation
+- ✅ **Google Authenticator Import**: otpauth-migration QR decoding with stitched batches and import preview
+- ✅ **Entry Management**: Search, grouping, sorting, tags, bulk operations, pinning, pointer drag & drop reorder
+- ✅ **Encrypted Storage**: Parameterized PBKDF2 (600k default) + AES-256-GCM with silent legacy re-encryption
+- ✅ **Biometric Unlock**: WebAuthn PRF two-envelope DEK design; passphrase remains the recovery path
+- ✅ **Session Hardening**: Auto-lock, unlock throttling with backoff, CSP with vendored fonts and bundled jsqr
+- ✅ **Backup System**: Export/import with versioned format and checksum validation; 30-day backup reminder
+- ✅ **Data Safety**: Undo delete with 10-minute tombstone, server time-drift check
 - ✅ **Migration Support**: Automatic v1 to v2 backup format upgrade
 - ✅ **PWA Support**: Service worker caching, offline capability, install prompt
-- ✅ **Chrome Extension**: Full-featured MV3 extension with QR import
-- ✅ **Copy History**: Track last 6 copied codes with optional auto-clear
+- ✅ **Chrome Extension**: Full-featured MV3 extension with QR import and session-unlock cache
+- ✅ **Copy History**: Track last 6 copied codes with optional auto-clear and copy haptics
 - ✅ **Privacy Features**: Code blurring, screenshot-safe mode, clipboard clear
-- ✅ **Visual Feedback**: Urgent indicators, countdown timers, online/offline status
-- ✅ **Keyboard Shortcuts**: Quick access to search and new entry functions
+- ✅ **Visual Feedback**: Per-entry countdown rings, urgent indicators, dark mode (System/Light/Dark)
+- ✅ **Accessibility**: Axe-scanned views (zero criticals), keyboard-reachable controls, announced toasts
+- ✅ **i18n Framework**: `lib/i18n.js` English catalog; unlock + settings areas read strings via `t()`
 
 ### Testing and Quality Assurance
 - ✅ **Unit Tests**: Vitest coverage for `lib/` modules
@@ -41,6 +53,10 @@ The Personal OTP Vault is currently in stable beta (v0.1.1) with core functional
 No confirmed in-progress items at this time. The project is in maintenance mode for v0.1.x while gathering user feedback and usage patterns.
 
 ## Future Themes (Proposals)
+
+Deferred ideas recorded during the 0.2.0 cycle (not scheduled): 2FAS/Aegis
+export import, single-entry QR export, an extension keyboard shortcut, and a
+keyed (HMAC) backup checksum v3 for authenticity rather than integrity-only.
 
 ### Enhanced QR Code Support (Future Proposal)
 **Rationale**: Current QR parsing focuses on standard `otpauth://` URIs. Some services use custom QR formats or Steam Guard's special encoding.
@@ -104,28 +120,22 @@ No confirmed in-progress items at this time. The project is in maintenance mode 
 - Additional testing infrastructure
 - Documentation and support for multiple stores
 
-### Biometric Unlock (Future Proposal)
-**Rationale**: Enhanced security through platform-specific biometric authentication for vault unlock.
+### Biometric Unlock (SHIPPED in 0.2.0)
+Implemented via the WebAuthn `prf` extension with a two-envelope DEK design:
+vault data is encrypted under a random DEK, wrapped once under the passphrase
+key (recovery) and once under an HKDF-derived KEK from the authenticator's PRF
+output. `userVerification: "required"` gates every ceremony; the passphrase
+path always remains, and backups export passphrase-encrypted so they restore on
+any version. Remaining follow-up: manual hardware matrix across Windows Hello /
+Touch ID profiles (the runtime capability probe handles unsupported
+authenticators).
 
-**Proposed Enhancements**:
-- Web Authentication API (WebAuthn) integration
-- Platform-specific biometric APIs (where available)
-- Fingerprint reader, Face ID, Windows Hello support
-- Fallback to passphrase for unsupported platforms
-
-**Implementation Considerations**:
-- WebAuthn API compatibility across browsers
-- Credential storage and management
-- Fallback UX for biometric failures
-- Security review of WebAuthn integration
-
-### Enhanced Visual Design (Future Proposal)
-**Rationale**: Current functional design prioritizes clarity over aesthetics. Could enhance visual appeal while maintaining usability.
-
-**Proposed Enhancements**:
-- Modernized color scheme and typography
-- Improved accessibility (contrast, focus states)
-- Enhanced animations and transitions
+### Enhanced Visual Design (SHIPPED in 0.2.0)
+Shipped: tokenized design tokens with a dark theme default and a
+System/Light/Dark toggle, vendored Space Grotesk + IBM Plex Mono fonts,
+per-entry countdown rings, drag & drop reorder, and an axe-core accessibility
+pass with zero critical violations. Remaining follow-up ideas: additional
+themes and motion refinements (both respect `prefers-reduced-motion`).
 - Dark mode optimization
 - Customizable themes
 
