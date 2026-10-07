@@ -1,6 +1,7 @@
 import jsQR from "jsqr";
 import {
   compareEntries,
+  computeDropIndex,
   entryMatchesQuery,
   extractMigrationUris,
   extractOtpAuthUri,
@@ -54,6 +55,7 @@ import {
   unwrapDek,
   wrapDek,
 } from './lib/biometric.js';
+import { t } from './lib/i18n.js';
 
 // app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v3";
@@ -179,6 +181,7 @@ var defaultSettings = {
   clearClipboard: false,
   autoLockMinutes: 15,
   timeDriftCheck: false,
+  theme: "system",
   sortBy: "pinned-alpha",
   groupBy: "none"
 };
@@ -207,7 +210,36 @@ var debugEvents = [];
 var importPreviewState = null;
 var backupImportState = null;
 initialize();
+// Phase 7 FR7 pattern-setter: the unlock + settings areas read their strings
+// through t(). Toast/import strings stay hardcoded this release (reserved
+// keys are seeded in lib/i18n.js for a later migration).
+function applyStaticStrings() {
+  const set = (id, key) => {
+    const node = document.getElementById(id);
+    if (node && typeof t(key) === "string") node.textContent = t(key);
+  };
+  const setPlaceholder = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.setAttribute("placeholder", t(key));
+  };
+  set("unlock-heading", "unlock.title");
+  set("unlock-btn", "unlock.button");
+  set("export-backup", "settings.exportBackup");
+  set("change-passphrase-btn", "settings.changePassphrase");
+  set("save-settings", "settings.save");
+  setPlaceholder("unlock-passphrase", "unlock.passphrasePlaceholder");
+  setPlaceholder("vault-passphrase", "settings.passphrasePlaceholder");
+  setPlaceholder("vault-passphrase-confirm", "settings.passphraseConfirmPlaceholder");
+  const passphraseLabel = document.querySelector("#encryption-fields label:first-child span");
+  if (passphraseLabel) passphraseLabel.textContent = t("settings.passphraseLabel");
+  const confirmLabel = document.querySelector("#encryption-fields label:nth-child(2) span");
+  if (confirmLabel) confirmLabel.textContent = t("settings.passphraseConfirmLabel");
+  const guidance = document.getElementById("passphrase-guidance");
+  if (guidance) guidance.textContent = t("settings.passphraseGuidance");
+}
+
 function initialize() {
+  applyStaticStrings();
   syncSettingsUI();
   applyVisualSettings();
   loadVaultOnStartup();
@@ -247,6 +279,8 @@ function syncSettingsUI() {
   encryptToggle.checked = settings.encrypt;
   const autoLockSelect = document.getElementById("auto-lock-select");
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes);
+  const themeSelect = document.getElementById("theme-select");
+  if (themeSelect) themeSelect.value = settings.theme || "system";
   const timeDriftToggle = document.getElementById("time-drift-toggle");
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
@@ -270,6 +304,14 @@ function syncSettingsUI() {
 function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
   document.body.classList.toggle("screenshot-safe", settings.screenshotSafe);
+  // Theme resolution (FR1): explicit Light/Dark sets data-theme; System
+  // removes the attribute so prefers-color-scheme decides.
+  const theme = settings.theme || "system";
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
 }
 // Phase 6 UI gating: the settings section is visible iff the runtime proves
 // PRF capability; the unlock button additionally requires an enrolled record.
@@ -915,6 +957,75 @@ async function moveEntry(entryId, direction) {
   [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
   await replaceEntries(resequenceEntries(ordered));
 }
+
+// --- Drag & drop reorder (Phase 7 FR3) ---
+// Pointer-based handle drag; commits through the same custom-order path as
+// the move buttons. Pointer capture routes move/up events to the dragged
+// card, so no document-level listeners are needed.
+var entryDragState = null;
+
+function cardMidpoints() {
+  return [...entriesRoot.querySelectorAll(".entry")].map(
+    (card) => card.getBoundingClientRect().top + card.offsetHeight / 2
+  );
+}
+
+function startEntryDrag(event, entry, node) {
+  if (settings.sortBy !== "custom" || event.button !== 0 || entryDragState) return;
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const fromIndex = ordered.findIndex((item) => item.id === entry.id);
+  if (fromIndex < 0 || ordered.length < 2) return;
+  event.preventDefault();
+  entryDragState = { entryId: entry.id, fromIndex, node };
+  node.classList.add("dragging");
+  document.body.classList.add("dragging-entry");
+  try {
+    node.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture is unavailable; drag still works while the pointer
+    // stays over the card.
+  }
+  node.addEventListener("pointermove", moveEntryDrag);
+  node.addEventListener("pointerup", endEntryDrag);
+  node.addEventListener("pointercancel", endEntryDrag);
+}
+
+function moveEntryDrag(event) {
+  if (!entryDragState) return;
+  const hovered = [...entriesRoot.querySelectorAll(".entry")].find((card) => {
+    if (card === entryDragState.node) return false;
+    const rect = card.getBoundingClientRect();
+    return event.clientY >= rect.top && event.clientY <= rect.bottom;
+  });
+  [...entriesRoot.querySelectorAll(".entry")].forEach((card) => {
+    card.classList.toggle("drag-over", card === hovered);
+  });
+}
+
+async function endEntryDrag(event) {
+  const state = entryDragState;
+  if (!state) return;
+  entryDragState = null;
+  state.node.removeEventListener("pointermove", moveEntryDrag);
+  state.node.removeEventListener("pointerup", endEntryDrag);
+  state.node.removeEventListener("pointercancel", endEntryDrag);
+  state.node.classList.remove("dragging");
+  document.body.classList.remove("dragging-entry");
+  entriesRoot.querySelectorAll(".entry").forEach((card) => card.classList.remove("drag-over"));
+  const target = computeDropIndex(cardMidpoints(), state.fromIndex, event.clientY);
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const currentIndex = ordered.findIndex((item) => item.id === state.entryId);
+  if (currentIndex < 0) return;
+  const [moved] = ordered.splice(currentIndex, 1);
+  ordered.splice(Math.min(target, ordered.length), 0, moved);
+  try {
+    await replaceEntries(resequenceEntries(ordered));
+    setImportStatus("Manual order updated", "success");
+  } catch (error) {
+    reportError("Drag reorder failed", error);
+    setImportStatus(toUserMessage(error, "Could not reorder entries"), "error");
+  }
+}
 function addCopyHistory(label, code) {
   copyHistory = [{
     label,
@@ -975,6 +1086,14 @@ function createEntryNode(entry) {
   const pinBtn = node.querySelector(".pin");
   const removeBtn = node.querySelector(".remove");
   const selectBox = node.querySelector(".entry-select");
+  const dragHandle = node.querySelector(".drag-handle");
+  if (dragHandle) {
+    // Manual reorder only applies to custom sort; hidden otherwise.
+    dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
+    dragHandle.addEventListener("pointerdown", (event) => {
+      startEntryDrag(event, entry, node);
+    });
+  }
   avatar.textContent = getIssuerInitials(entry.label);
   refreshEntryMetadata(node, entry);
   renderTagRow(node, entry);
@@ -983,6 +1102,8 @@ function createEntryNode(entry) {
       const latestCode = node.dataset.otp;
       if (!latestCode) return;
       await navigator.clipboard.writeText(latestCode);
+      // Progressive enhancement: silent no-op where unsupported (iOS Safari).
+      navigator.vibrate?.(20);
       addCopyHistory(entry.label, latestCode);
       copyBtn.textContent = "Copied";
       if (settings.clearClipboard) {
@@ -1135,6 +1256,10 @@ function renderEntries() {
         entryNodes.set(entry.id, node);
       }
       refreshEntryMetadata(node, entry);
+      // Nodes are reused across renders — keep handle visibility in sync
+      // with the current sort mode.
+      const dragHandle = node.querySelector(".drag-handle");
+      if (dragHandle) dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
       node.classList.toggle("pinned", entry.pinned);
       node.querySelector(".pin").textContent = entry.pinned ? "Unpin" : "Pin";
       const selectBox = node.querySelector(".entry-select");
@@ -1154,6 +1279,7 @@ async function updateEntryNode(entry, now) {
   const code = node.querySelector(".entry-code");
   const seconds = node.querySelector(".entry-seconds");
   const bar = node.querySelector(".entry-bar");
+  const ring = node.querySelector(".ring-progress");
   const copyBtn = node.querySelector(".copy");
   try {
     let otp;
@@ -1163,12 +1289,15 @@ async function updateEntryNode(entry, now) {
       seconds.textContent = `counter #${entry.counter}`;
       bar.style.transform = "scaleX(1)";
       node.classList.toggle("urgent", false);
+      // Style-only write, O(1) per card per tick (NFR3).
+      if (ring) ring.style.strokeDashoffset = "0";
       otp = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
     } else {
       const remaining = entry.period - now % entry.period;
       seconds.textContent = `${remaining}s left`;
       bar.style.transform = `scaleX(${remaining / entry.period})`;
       node.classList.toggle("urgent", remaining <= 10);
+      if (ring) ring.style.strokeDashoffset = String(100 - (remaining / entry.period) * 100);
       otp = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
     }
     code.textContent = formatCode(otp);
@@ -1844,6 +1973,7 @@ async function handleSaveSettings() {
     clearClipboard: clearClipboardToggle.checked,
     autoLockMinutes: Number(document.getElementById("auto-lock-select")?.value ?? settings.autoLockMinutes) || 0,
     timeDriftCheck: document.getElementById("time-drift-toggle")?.checked ?? settings.timeDriftCheck,
+    theme: document.getElementById("theme-select")?.value ?? settings.theme ?? "system",
     sortBy: sortSelect.value,
     groupBy: groupSelect.value
   };
@@ -1881,7 +2011,7 @@ async function handleSaveSettings() {
       clearPersistedEntries();
       syncSettingsUI();
       setLocked(false);
-      setSettingsStatus("Entries are now session-only", "success");
+      setSettingsStatus(t("settings.statusSessionOnly"), "success");
       vaultPassphraseInput.value = "";
       vaultPassphraseConfirmInput.value = "";
       return;
@@ -1903,7 +2033,7 @@ async function handleSaveSettings() {
   setLocked(false);
   const encryptedVaultExists = settings.persist && settings.encrypt && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
   setSettingsStatus(
-    encryptedVaultExists ? "Encrypted vault saved. Use Change Passphrase to rotate your vault secret." : settings.encrypt ? "Encrypted vault saved" : "Device storage updated",
+    encryptedVaultExists ? t("settings.statusEncryptedVaultSaved") : settings.encrypt ? t("settings.statusEncryptedSaved") : t("settings.statusDeviceStorageUpdated"),
     "success"
   );
   vaultPassphraseInput.value = "";
@@ -2455,7 +2585,7 @@ function bindEvents() {
       );
       setChangePassphraseStatus("");
       changePassphraseDialog.close("accept");
-      setSettingsStatus("Vault passphrase updated", "success");
+      setSettingsStatus(t("settings.statusPassphraseUpdated"), "success");
     } catch (error) {
       setChangePassphraseStatus(toUserMessage(error, "Could not update passphrase"), "error");
     }
@@ -2470,14 +2600,14 @@ function bindEvents() {
       await stageBackupImport(file);
     } catch (error) {
       reportError("Backup import failed", error);
-      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
+      setSettingsStatus(toUserMessage(error, t("settings.statusImportFailed")), "error");
     } finally {
       importBackupInput.value = "";
     }
   });
   lockAppBtn.addEventListener("click", () => {
     if (!settings.encrypt) {
-      setSettingsStatus("Enable encrypted storage to use lock/unlock", "error");
+      setSettingsStatus(t("settings.statusLockRequiresEncryption"), "error");
       return;
     }
     lockVault();
@@ -2527,14 +2657,14 @@ function bindEvents() {
       await unlockVault(unlockPassphraseInput.value);
       writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
       unlockPassphraseInput.value = "";
-      setUnlockStatus("Vault unlocked", "success");
+      setUnlockStatus(t("unlock.statusSuccess"), "success");
     } catch (error) {
       const attempts = guard.attempts + 1;
       const backoff = unlockBackoffSeconds(attempts);
       writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
       const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
       reportError("Vault unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted vault") + suffix, "error");
+      setUnlockStatus(toUserMessage(error, t("unlock.statusFailed")) + suffix, "error");
     } finally {
       operationDepth -= 1;
       unlockBtn.disabled = false;
@@ -2542,7 +2672,7 @@ function bindEvents() {
   });
   installAppBtn.addEventListener("click", async () => {
     if (!deferredInstallPrompt) {
-      setSettingsStatus("Install prompt is not available yet on this browser", "error");
+      setSettingsStatus(t("settings.statusInstallUnavailable"), "error");
       return;
     }
     await deferredInstallPrompt.prompt();
@@ -2584,7 +2714,7 @@ function bindEvents() {
       backupReviewDialog.close();
       setSettingsStatus("Backup imported", "success");
     } catch (error) {
-      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
+      setSettingsStatus(toUserMessage(error, t("settings.statusImportFailed")), "error");
     }
   });
   backupImportMode?.addEventListener("change", () => {

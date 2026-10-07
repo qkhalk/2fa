@@ -1,4 +1,6 @@
 import {
+  compareEntries,
+  computeDropIndex,
   extractMigrationUris,
   extractOtpAuthUri,
   formatCode,
@@ -14,6 +16,7 @@ import {
   reportError,
   toUserMessage,
 } from "../lib/otp.js";
+import { t } from "../lib/i18n.js";
 import {
   migrationToEntryCandidates,
   parseMigrationUri,
@@ -123,7 +126,7 @@ const migrationPreviewList = document.getElementById("migration-preview-list");
 let entries = [];
 let entryNodes = new Map();
 let collapsed = false;
-let settings = { encrypt: false, sortBy: "alpha" };
+let settings = { encrypt: false, sortBy: "alpha", theme: "system" };
 let currentPassphrase = "";
 let heldDek = null;         // CryptoKey held between unlock and lock (biometric/DEK mode)
 let dekEnvelopeMeta = null; // { salt, kdf, dek } — stable across DEK-mode saves
@@ -133,6 +136,38 @@ let confirmRemoveCallback = null;
 let lastActivity = Date.now();
 let migrationPreviewState = null;
 let undoTombstone = null; // live undo items offered on this popup open
+
+// Phase 7 FR1: explicit Light/Dark sets data-theme; System removes the
+// attribute so prefers-color-scheme decides.
+function applyTheme() {
+  const theme = settings.theme || "system";
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
+}
+
+// Phase 7 FR7 pattern-setter: unlock + settings areas read strings via t().
+function applyStaticStrings() {
+  const set = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = t(key);
+  };
+  const setPlaceholder = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.setAttribute("placeholder", t(key));
+  };
+  set("unlock-btn", "unlock.extensionButton");
+  set("export-backup", "settings.exportBackup");
+  set("change-passphrase-btn", "settings.changePassphrase");
+  set("save-security", "settings.extensionSave");
+  setPlaceholder("unlock-passphrase", "unlock.extensionPassphrasePlaceholder");
+  setPlaceholder("passphrase", "settings.extensionPassphrasePlaceholder");
+  setPlaceholder("passphrase-confirm", "settings.extensionPassphraseConfirmPlaceholder");
+  const guidance = document.getElementById("passphrase-guidance");
+  if (guidance) guidance.textContent = t("settings.extensionPassphraseGuidance");
+}
 
 initialize();
 
@@ -146,6 +181,9 @@ async function initialize() {
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes ?? 15);
   const timeDriftToggle = document.getElementById("time-drift-toggle");
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
+  const themeSelect = document.getElementById("theme-select");
+  if (themeSelect) themeSelect.value = settings.theme || "system";
+  applyTheme();
   const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
   passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
   passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
@@ -181,6 +219,7 @@ async function initialize() {
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
     await reconcileOrphanedBiometricRecord();
   }
+  applyStaticStrings();
   bindEvents();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
@@ -1103,15 +1142,93 @@ function showRemoveConfirmation(message) {
   });
 }
 
+// --- Drag & drop reorder (Phase 7 FR3) ---
+// Pointer-based handle drag committed through the same custom-order path as
+// the move buttons; pointer capture keeps listeners on the dragged card.
+let entryDragState = null;
+
+function popupCardMidpoints() {
+  return [...entriesRoot.querySelectorAll(".entry-card")].map(
+    (card) => card.getBoundingClientRect().top + card.offsetHeight / 2
+  );
+}
+
+function startEntryDrag(event, entry, node) {
+  if (settings.sortBy !== "custom" || event.button !== 0 || entryDragState) return;
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const fromIndex = ordered.findIndex((item) => item.id === entry.id);
+  if (fromIndex < 0 || ordered.length < 2) return;
+  event.preventDefault();
+  entryDragState = { entryId: entry.id, fromIndex, node };
+  node.classList.add("dragging");
+  document.body.classList.add("dragging-entry");
+  try {
+    node.setPointerCapture(event.pointerId);
+  } catch {
+    // Pointer capture unavailable; drag still works over the card itself.
+  }
+  node.addEventListener("pointermove", moveEntryDrag);
+  node.addEventListener("pointerup", endEntryDrag);
+  node.addEventListener("pointercancel", endEntryDrag);
+}
+
+function moveEntryDrag(event) {
+  if (!entryDragState) return;
+  const hovered = [...entriesRoot.querySelectorAll(".entry-card")].find((card) => {
+    if (card === entryDragState.node) return false;
+    const rect = card.getBoundingClientRect();
+    return event.clientY >= rect.top && event.clientY <= rect.bottom;
+  });
+  [...entriesRoot.querySelectorAll(".entry-card")].forEach((card) => {
+    card.classList.toggle("drag-over", card === hovered);
+  });
+}
+
+async function endEntryDrag(event) {
+  const state = entryDragState;
+  if (!state) return;
+  entryDragState = null;
+  state.node.removeEventListener("pointermove", moveEntryDrag);
+  state.node.removeEventListener("pointerup", endEntryDrag);
+  state.node.removeEventListener("pointercancel", endEntryDrag);
+  state.node.classList.remove("dragging");
+  document.body.classList.remove("dragging-entry");
+  entriesRoot.querySelectorAll(".entry-card").forEach((card) => card.classList.remove("drag-over"));
+  const target = computeDropIndex(popupCardMidpoints(), state.fromIndex, event.clientY);
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const currentIndex = ordered.findIndex((item) => item.id === state.entryId);
+  if (currentIndex < 0) return;
+  const [moved] = ordered.splice(currentIndex, 1);
+  ordered.splice(Math.min(target, ordered.length), 0, moved);
+  try {
+    await replaceEntries(resequenceEntries(ordered));
+    setMainStatus("Manual order updated", "success");
+  } catch (error) {
+    reportError("Extension drag reorder failed", error);
+    setMainStatus(toUserMessage(error, "Could not reorder entries"), "error");
+  }
+}
+
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
+
+  const dragHandle = node.querySelector(".drag-handle");
+  if (dragHandle) {
+    // Manual reorder only applies to custom sort; hidden otherwise.
+    dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
+    dragHandle.addEventListener("pointerdown", (event) => {
+      startEntryDrag(event, entry, node);
+    });
+  }
 
   node.querySelector(".copy").addEventListener("click", async () => {
     try {
       const otp = node.dataset.otp;
       if (!otp) return;
       await navigator.clipboard.writeText(otp);
+      // Progressive enhancement: silent no-op where unsupported (iOS Safari).
+      navigator.vibrate?.(20);
       addCopyHistory(entry.label, otp);
       setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
       await consumeHotpCounter(entry);
@@ -1200,6 +1317,10 @@ function renderEntries() {
       entryNodes.set(entry.id, node);
     }
     refreshEntryNode(node, entry);
+    // Nodes are reused across renders — keep handle visibility in sync
+    // with the current sort mode.
+    const dragHandle = node.querySelector(".drag-handle");
+    if (dragHandle) dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
     fragment.appendChild(node);
   }
   for (const [id] of entryNodes) {
@@ -1218,6 +1339,8 @@ async function updateEntryNode(entry, now) {
       // counter advances only on copy (no rolling timer, FR8).
       node.querySelector(".seconds").textContent = `#${entry.counter}`;
       node.querySelector(".bar").style.transform = "scaleX(1)";
+      const hotpRing = node.querySelector(".ring-progress");
+      if (hotpRing) hotpRing.style.strokeDashoffset = "0";
       node.classList.toggle("urgent", false);
       code = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
     } else {
@@ -1225,6 +1348,9 @@ async function updateEntryNode(entry, now) {
       code = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
       node.querySelector(".seconds").textContent = `${remaining}s`;
       node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
+      const ring = node.querySelector(".ring-progress");
+      // Style-only write, O(1) per card per tick (NFR3).
+      if (ring) ring.style.strokeDashoffset = String(100 - (remaining / entry.period) * 100);
       node.classList.toggle("urgent", remaining <= 10);
     }
     node.dataset.otp = code;
@@ -1576,6 +1702,11 @@ function bindEvents() {
       if (autoLockSelect) settings.autoLockMinutes = Number(autoLockSelect.value) || 0;
       const timeDriftToggle = document.getElementById("time-drift-toggle");
       if (timeDriftToggle) settings.timeDriftCheck = timeDriftToggle.checked;
+      const themeSelect = document.getElementById("theme-select");
+      if (themeSelect) {
+        settings.theme = themeSelect.value;
+        applyTheme();
+      }
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {

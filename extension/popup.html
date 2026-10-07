@@ -114,6 +114,14 @@
           <option value="0">Off</option>
         </select>
       </label>
+      <label>
+        <span>Theme</span>
+        <select id="theme-select">
+          <option value="system" selected>Match system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
       <label class="toggle-row">
         <input id="time-drift-toggle" type="checkbox">
         <span>Check device clock against server time (needs network)</span>
@@ -167,6 +175,7 @@
   <template id="entry-template">
     <article class="entry-card">
       <div class="entry-top">
+        <button class="drag-handle" type="button" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
         <div class="avatar"></div>
         <div class="identity">
           <h3 class="issuer"></h3>
@@ -191,6 +200,10 @@
         <div class="mini-timer">
           <span class="seconds"></span>
           <div class="timer-track"><div class="bar"></div></div>
+          <svg class="entry-ring" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="ring-track" cx="18" cy="18" r="16"></circle>
+            <circle class="ring-progress" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"></circle>
+          </svg>
         </div>
       </div>
     </article>

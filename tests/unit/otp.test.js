@@ -4,6 +4,7 @@ import {
   base32ToBytes,
   bytesToBase32,
   compareEntries,
+  computeDropIndex,
   extractOtpAuthUri,
   generateEntryId,
   generateHotp,
@@ -291,5 +292,28 @@ describe("otp helpers", () => {
       expect(base32ToBytes(bytesToBase32(bytes))).toEqual(bytes);
     }
     expect(bytesToBase32(new Uint8Array([0]))).toBe("AA======".replaceAll("=", ""));
+  });
+
+  it("computeDropIndex maps pointer position to post-removal splice index", () => {
+    // Cards at 0-100, 100-200, 200-300, 300-400 → midpoints 50/150/250/350.
+    const midpoints = [50, 150, 250, 350];
+
+    // Pointer above everything → insert at top.
+    expect(computeDropIndex(midpoints, 2, 10)).toBe(0);
+    // Pointer between card 0 and card 1 midpoints → index 1.
+    expect(computeDropIndex(midpoints, 2, 100)).toBe(1);
+    // Pointer exactly on a midpoint → insert before that card (inclusive rule).
+    expect(computeDropIndex(midpoints, 0, 150)).toBe(0);
+    // Dragging the FIRST item downward: its own midpoint is ignored.
+    expect(computeDropIndex(midpoints, 0, 50)).toBe(0);
+    expect(computeDropIndex(midpoints, 0, 200)).toBe(1);
+    expect(computeDropIndex(midpoints, 0, 300)).toBe(2);
+    // Dragging the LAST item upward past everything → index 0.
+    expect(computeDropIndex(midpoints, 3, 10)).toBe(0);
+    // Below everything → append at the end.
+    expect(computeDropIndex(midpoints, 0, 500)).toBe(3);
+    // Non-finite or empty inputs keep positions stable.
+    expect(computeDropIndex(midpoints, 1, Number.NaN)).toBe(3);
+    expect(computeDropIndex([], 0, 10)).toBe(0);
   });
 });

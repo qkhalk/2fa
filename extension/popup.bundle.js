@@ -236,6 +236,22 @@ function extractOtpAuthUris(rawText) {
 function hasDuplicateEntry(entries2, candidate) {
   return entries2.some((entry) => entry.secret === candidate.secret && entry.digits === candidate.digits && entry.period === candidate.period);
 }
+function compareEntries(a, b, sortBy = "pinned-alpha") {
+  if (sortBy === "recent") return b.createdAt - a.createdAt;
+  if (sortBy === "period") return a.period - b.period || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+  if (sortBy === "custom") return a.order - b.order || a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+  return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
+}
+function computeDropIndex(midpoints, fromIndex, y) {
+  if (!Array.isArray(midpoints) || midpoints.length === 0) return 0;
+  const others = midpoints.filter((_, index) => index !== fromIndex);
+  if (!Number.isFinite(y) || others.length === 0) return others.length;
+  for (let index = 0; index < others.length; index += 1) {
+    if (y <= others[index]) return index;
+  }
+  return others.length;
+}
 function base32ToBytes(base32) {
   const clean = sanitizeBase32(base32);
   if (!clean) return new Uint8Array();
@@ -320,6 +336,96 @@ function formatCode(code) {
   if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
   if (code.length === 8) return `${code.slice(0, 4)} ${code.slice(4)}`;
   return code;
+}
+
+// lib/i18n.js
+var DEFAULT_LOCALE = "en";
+var PLACEHOLDER_PATTERN = /\{([a-zA-Z0-9_]+)\}/g;
+var en = {
+  // Unlock panel — web app (index.html #unlock-panel)
+  "unlock.eyebrow": "vault state",
+  "unlock.title": "Vault locked on this device",
+  "unlock.helper": "Unlock with your passphrase to read encrypted entries stored locally.",
+  "unlock.passphrasePlaceholder": "Enter vault passphrase",
+  "unlock.button": "Unlock Vault",
+  "unlock.statusSuccess": "Vault unlocked",
+  "unlock.statusFailed": "Incorrect passphrase or unreadable encrypted vault",
+  // Unlock panel — extension popup (popup.html #unlock-panel)
+  "unlock.extensionTitle": "Extension Vault",
+  "unlock.extensionPassphrasePlaceholder": "Passphrase to unlock encrypted storage",
+  "unlock.extensionButton": "Unlock",
+  // Settings panel — web app (index.html settings-panel)
+  "settings.eyebrow": "privacy",
+  "settings.heading": "Device & Backup Controls",
+  "settings.persistToggle": "Remember entries on this device",
+  "settings.encryptToggle": "Encrypt stored entries with a passphrase",
+  "settings.unlockOnLoadToggle": "Require unlock when opening this app",
+  "settings.blurCodesToggle": "Blur OTP codes until hovered or focused",
+  "settings.screenshotSafeToggle": "Screenshot-safe mode hides codes until revealed",
+  "settings.clearClipboardToggle": "Clear clipboard 30 seconds after copy",
+  "settings.passphraseLabel": "Vault passphrase",
+  "settings.passphrasePlaceholder": "Use a strong passphrase",
+  "settings.passphraseConfirmLabel": "Confirm passphrase",
+  "settings.passphraseConfirmPlaceholder": "Repeat passphrase",
+  "settings.passphraseGuidance": "This vault is already encrypted. Use Change Passphrase to rotate your vault secret.",
+  "settings.exportBackup": "Export Backup",
+  "settings.importBackup": "Import Backup",
+  "settings.changePassphrase": "Change Passphrase",
+  "settings.save": "Save Privacy Settings",
+  // Seeded ahead of the planned auto-lock setting
+  "settings.autoLock": "Lock vault automatically after {minutes} minutes",
+  "settings.autoLockOff": "Auto-lock is off",
+  "settings.statusEncryptedVaultSaved": "Encrypted vault saved. Use Change Passphrase to rotate your vault secret.",
+  "settings.statusEncryptedSaved": "Encrypted vault saved",
+  "settings.statusDeviceStorageUpdated": "Device storage updated",
+  "settings.statusSessionOnly": "Entries are now session-only",
+  "settings.statusImportFailed": "Could not import backup",
+  "settings.statusPassphraseUpdated": "Vault passphrase updated",
+  "settings.statusLockRequiresEncryption": "Enable encrypted storage to use lock/unlock",
+  "settings.statusSaveFailed": "Could not save settings",
+  "settings.statusInstallUnavailable": "Install prompt is not available yet on this browser",
+  // Settings panel — extension popup (popup.html settings-panel)
+  "settings.extensionHeading": "Security",
+  "settings.extensionEncryptToggle": "Encrypt entries in extension storage",
+  "settings.extensionPassphrasePlaceholder": "New passphrase",
+  "settings.extensionPassphraseConfirmPlaceholder": "Confirm passphrase",
+  "settings.extensionPassphraseGuidance": "This vault is already encrypted. Use Change Passphrase to rotate your extension secret.",
+  "settings.extensionSave": "Save Security Settings",
+  // Change passphrase flow — shared by both platforms
+  "settings.changePassphraseTitle": "Change passphrase",
+  "settings.currentPassphraseLabel": "Current passphrase",
+  "settings.currentPassphrasePlaceholder": "Enter current passphrase",
+  "settings.newPassphraseLabel": "New passphrase",
+  "settings.newPassphrasePlaceholder": "Use a new strong passphrase",
+  "settings.confirmNewPassphraseLabel": "Confirm new passphrase",
+  "settings.confirmNewPassphrasePlaceholder": "Repeat new passphrase",
+  "settings.updatePassphrase": "Update Passphrase"
+};
+var reserved = {
+  "toast.vaultTitle": "Vault",
+  "toast.importTitle": "Import",
+  "toast.settingsTitle": "Settings",
+  "toast.copyFailed": "Could not copy OTP to clipboard",
+  "import.entryAdded": "Entry added",
+  "import.invalidUri": "Invalid URI",
+  "import.qrUrlRequired": "Please enter a QR image URL",
+  "import.readingQrFile": "Reading QR file...",
+  "import.fetchingQrUrl": "Fetching QR image URL..."
+};
+var catalogs = /* @__PURE__ */ new Map([[DEFAULT_LOCALE, { ...en, ...reserved }]]);
+var activeLocale = DEFAULT_LOCALE;
+function t(key, params) {
+  return interpolate(resolveTemplate(key), params);
+}
+function resolveTemplate(key) {
+  if (typeof key !== "string" || !key) return key;
+  const value = catalogs.get(activeLocale)?.[key] ?? catalogs.get(DEFAULT_LOCALE)?.[key];
+  return typeof value === "string" ? value : key;
+}
+function interpolate(template2, params) {
+  if (typeof template2 !== "string") return template2;
+  if (!params || typeof params !== "object") return template2;
+  return template2.replace(PLACEHOLDER_PATTERN, (match, name) => Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match);
 }
 
 // lib/migration.js
@@ -1410,7 +1516,7 @@ var migrationPreviewList = document.getElementById("migration-preview-list");
 var entries = [];
 var entryNodes = /* @__PURE__ */ new Map();
 var collapsed = false;
-var settings = { encrypt: false, sortBy: "alpha" };
+var settings = { encrypt: false, sortBy: "alpha", theme: "system" };
 var currentPassphrase = "";
 var heldDek = null;
 var dekEnvelopeMeta = null;
@@ -1420,6 +1526,33 @@ var confirmRemoveCallback = null;
 var lastActivity = Date.now();
 var migrationPreviewState = null;
 var undoTombstone = null;
+function applyTheme() {
+  const theme = settings.theme || "system";
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
+}
+function applyStaticStrings() {
+  const set = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = t(key);
+  };
+  const setPlaceholder = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.setAttribute("placeholder", t(key));
+  };
+  set("unlock-btn", "unlock.extensionButton");
+  set("export-backup", "settings.exportBackup");
+  set("change-passphrase-btn", "settings.changePassphrase");
+  set("save-security", "settings.extensionSave");
+  setPlaceholder("unlock-passphrase", "unlock.extensionPassphrasePlaceholder");
+  setPlaceholder("passphrase", "settings.extensionPassphrasePlaceholder");
+  setPlaceholder("passphrase-confirm", "settings.extensionPassphraseConfirmPlaceholder");
+  const guidance = document.getElementById("passphrase-guidance");
+  if (guidance) guidance.textContent = t("settings.extensionPassphraseGuidance");
+}
 initialize();
 async function initialize() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY, ENCRYPTED_KEY, SETTINGS_KEY, UI_KEY]);
@@ -1431,6 +1564,9 @@ async function initialize() {
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes ?? 15);
   const timeDriftToggle = document.getElementById("time-drift-toggle");
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
+  const themeSelect = document.getElementById("theme-select");
+  if (themeSelect) themeSelect.value = settings.theme || "system";
+  applyTheme();
   const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
   passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
   passphraseGuidance?.classList.toggle("hidden", !hasExistingEncryptedVault);
@@ -1460,6 +1596,7 @@ async function initialize() {
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
     await reconcileOrphanedBiometricRecord();
   }
+  applyStaticStrings();
   bindEvents();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
@@ -2258,14 +2395,80 @@ function showRemoveConfirmation(message) {
     confirmRemoveDialog.showModal();
   });
 }
+var entryDragState = null;
+function popupCardMidpoints() {
+  return [...entriesRoot.querySelectorAll(".entry-card")].map(
+    (card) => card.getBoundingClientRect().top + card.offsetHeight / 2
+  );
+}
+function startEntryDrag(event, entry, node) {
+  if (settings.sortBy !== "custom" || event.button !== 0 || entryDragState) return;
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const fromIndex = ordered.findIndex((item) => item.id === entry.id);
+  if (fromIndex < 0 || ordered.length < 2) return;
+  event.preventDefault();
+  entryDragState = { entryId: entry.id, fromIndex, node };
+  node.classList.add("dragging");
+  document.body.classList.add("dragging-entry");
+  try {
+    node.setPointerCapture(event.pointerId);
+  } catch {
+  }
+  node.addEventListener("pointermove", moveEntryDrag);
+  node.addEventListener("pointerup", endEntryDrag);
+  node.addEventListener("pointercancel", endEntryDrag);
+}
+function moveEntryDrag(event) {
+  if (!entryDragState) return;
+  const hovered = [...entriesRoot.querySelectorAll(".entry-card")].find((card) => {
+    if (card === entryDragState.node) return false;
+    const rect = card.getBoundingClientRect();
+    return event.clientY >= rect.top && event.clientY <= rect.bottom;
+  });
+  [...entriesRoot.querySelectorAll(".entry-card")].forEach((card) => {
+    card.classList.toggle("drag-over", card === hovered);
+  });
+}
+async function endEntryDrag(event) {
+  const state = entryDragState;
+  if (!state) return;
+  entryDragState = null;
+  state.node.removeEventListener("pointermove", moveEntryDrag);
+  state.node.removeEventListener("pointerup", endEntryDrag);
+  state.node.removeEventListener("pointercancel", endEntryDrag);
+  state.node.classList.remove("dragging");
+  document.body.classList.remove("dragging-entry");
+  entriesRoot.querySelectorAll(".entry-card").forEach((card) => card.classList.remove("drag-over"));
+  const target = computeDropIndex(popupCardMidpoints(), state.fromIndex, event.clientY);
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const currentIndex = ordered.findIndex((item) => item.id === state.entryId);
+  if (currentIndex < 0) return;
+  const [moved] = ordered.splice(currentIndex, 1);
+  ordered.splice(Math.min(target, ordered.length), 0, moved);
+  try {
+    await replaceEntries(resequenceEntries(ordered));
+    setMainStatus("Manual order updated", "success");
+  } catch (error) {
+    reportError("Extension drag reorder failed", error);
+    setMainStatus(toUserMessage(error, "Could not reorder entries"), "error");
+  }
+}
 function createEntryNode(entry) {
   const node = template.content.firstElementChild.cloneNode(true);
   refreshEntryNode(node, entry);
+  const dragHandle = node.querySelector(".drag-handle");
+  if (dragHandle) {
+    dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
+    dragHandle.addEventListener("pointerdown", (event) => {
+      startEntryDrag(event, entry, node);
+    });
+  }
   node.querySelector(".copy").addEventListener("click", async () => {
     try {
       const otp = node.dataset.otp;
       if (!otp) return;
       await navigator.clipboard.writeText(otp);
+      navigator.vibrate?.(20);
       addCopyHistory(entry.label, otp);
       setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
       await consumeHotpCounter(entry);
@@ -2344,6 +2547,8 @@ function renderEntries() {
       entryNodes.set(entry.id, node);
     }
     refreshEntryNode(node, entry);
+    const dragHandle = node.querySelector(".drag-handle");
+    if (dragHandle) dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
     fragment.appendChild(node);
   }
   for (const [id] of entryNodes) {
@@ -2359,6 +2564,8 @@ async function updateEntryNode(entry, now) {
     if (entry.type === "hotp") {
       node.querySelector(".seconds").textContent = `#${entry.counter}`;
       node.querySelector(".bar").style.transform = "scaleX(1)";
+      const hotpRing = node.querySelector(".ring-progress");
+      if (hotpRing) hotpRing.style.strokeDashoffset = "0";
       node.classList.toggle("urgent", false);
       code = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
     } else {
@@ -2366,6 +2573,8 @@ async function updateEntryNode(entry, now) {
       code = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
       node.querySelector(".seconds").textContent = `${remaining}s`;
       node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
+      const ring = node.querySelector(".ring-progress");
+      if (ring) ring.style.strokeDashoffset = String(100 - remaining / entry.period * 100);
       node.classList.toggle("urgent", remaining <= 10);
     }
     node.dataset.otp = code;
@@ -2687,6 +2896,11 @@ function bindEvents() {
       if (autoLockSelect) settings.autoLockMinutes = Number(autoLockSelect.value) || 0;
       const timeDriftToggle = document.getElementById("time-drift-toggle");
       if (timeDriftToggle) settings.timeDriftCheck = timeDriftToggle.checked;
+      const themeSelect = document.getElementById("theme-select");
+      if (themeSelect) {
+        settings.theme = themeSelect.value;
+        applyTheme();
+      }
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {

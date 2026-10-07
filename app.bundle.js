@@ -8169,12 +8169,12 @@ var require_jsQR = __commonJS({
               var rLast = a;
               var r = b;
               var tLast = field.zero;
-              var t = field.one;
+              var t2 = field.one;
               while (r.degree() >= R / 2) {
                 var rLastLast = rLast;
                 var tLastLast = tLast;
                 rLast = r;
-                tLast = t;
+                tLast = t2;
                 if (rLast.isZero()) {
                   return null;
                 }
@@ -8188,17 +8188,17 @@ var require_jsQR = __commonJS({
                   q = q.addOrSubtract(field.buildMonomial(degreeDiff, scale));
                   r = r.addOrSubtract(rLast.multiplyByMonomial(degreeDiff, scale));
                 }
-                t = q.multiplyPoly(tLast).addOrSubtract(tLastLast);
+                t2 = q.multiplyPoly(tLast).addOrSubtract(tLastLast);
                 if (r.degree() >= rLast.degree()) {
                   return null;
                 }
               }
-              var sigmaTildeAtZero = t.getCoefficient(0);
+              var sigmaTildeAtZero = t2.getCoefficient(0);
               if (sigmaTildeAtZero === 0) {
                 return null;
               }
               var inverse = field.inverse(sigmaTildeAtZero);
-              return [t.multiply(inverse), r.multiply(inverse)];
+              return [t2.multiply(inverse), r.multiply(inverse)];
             }
             function findErrorLocations(field, errorLocator) {
               var numErrors = errorLocator.degree();
@@ -10305,6 +10305,15 @@ function compareEntries(a, b, sortBy = "pinned-alpha") {
   if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   return a.label.localeCompare(b.label, void 0, { sensitivity: "base" });
 }
+function computeDropIndex(midpoints, fromIndex, y) {
+  if (!Array.isArray(midpoints) || midpoints.length === 0) return 0;
+  const others = midpoints.filter((_, index) => index !== fromIndex);
+  if (!Number.isFinite(y) || others.length === 0) return others.length;
+  for (let index = 0; index < others.length; index += 1) {
+    if (y <= others[index]) return index;
+  }
+  return others.length;
+}
 function base32ToBytes(base32) {
   const clean = sanitizeBase32(base32);
   if (!clean) return new Uint8Array();
@@ -11499,6 +11508,96 @@ async function enrollBiometricUnlock({
   return { credentialId, prfSalt, firstPrfOutput: prfOutput };
 }
 
+// lib/i18n.js
+var DEFAULT_LOCALE = "en";
+var PLACEHOLDER_PATTERN = /\{([a-zA-Z0-9_]+)\}/g;
+var en = {
+  // Unlock panel — web app (index.html #unlock-panel)
+  "unlock.eyebrow": "vault state",
+  "unlock.title": "Vault locked on this device",
+  "unlock.helper": "Unlock with your passphrase to read encrypted entries stored locally.",
+  "unlock.passphrasePlaceholder": "Enter vault passphrase",
+  "unlock.button": "Unlock Vault",
+  "unlock.statusSuccess": "Vault unlocked",
+  "unlock.statusFailed": "Incorrect passphrase or unreadable encrypted vault",
+  // Unlock panel — extension popup (popup.html #unlock-panel)
+  "unlock.extensionTitle": "Extension Vault",
+  "unlock.extensionPassphrasePlaceholder": "Passphrase to unlock encrypted storage",
+  "unlock.extensionButton": "Unlock",
+  // Settings panel — web app (index.html settings-panel)
+  "settings.eyebrow": "privacy",
+  "settings.heading": "Device & Backup Controls",
+  "settings.persistToggle": "Remember entries on this device",
+  "settings.encryptToggle": "Encrypt stored entries with a passphrase",
+  "settings.unlockOnLoadToggle": "Require unlock when opening this app",
+  "settings.blurCodesToggle": "Blur OTP codes until hovered or focused",
+  "settings.screenshotSafeToggle": "Screenshot-safe mode hides codes until revealed",
+  "settings.clearClipboardToggle": "Clear clipboard 30 seconds after copy",
+  "settings.passphraseLabel": "Vault passphrase",
+  "settings.passphrasePlaceholder": "Use a strong passphrase",
+  "settings.passphraseConfirmLabel": "Confirm passphrase",
+  "settings.passphraseConfirmPlaceholder": "Repeat passphrase",
+  "settings.passphraseGuidance": "This vault is already encrypted. Use Change Passphrase to rotate your vault secret.",
+  "settings.exportBackup": "Export Backup",
+  "settings.importBackup": "Import Backup",
+  "settings.changePassphrase": "Change Passphrase",
+  "settings.save": "Save Privacy Settings",
+  // Seeded ahead of the planned auto-lock setting
+  "settings.autoLock": "Lock vault automatically after {minutes} minutes",
+  "settings.autoLockOff": "Auto-lock is off",
+  "settings.statusEncryptedVaultSaved": "Encrypted vault saved. Use Change Passphrase to rotate your vault secret.",
+  "settings.statusEncryptedSaved": "Encrypted vault saved",
+  "settings.statusDeviceStorageUpdated": "Device storage updated",
+  "settings.statusSessionOnly": "Entries are now session-only",
+  "settings.statusImportFailed": "Could not import backup",
+  "settings.statusPassphraseUpdated": "Vault passphrase updated",
+  "settings.statusLockRequiresEncryption": "Enable encrypted storage to use lock/unlock",
+  "settings.statusSaveFailed": "Could not save settings",
+  "settings.statusInstallUnavailable": "Install prompt is not available yet on this browser",
+  // Settings panel — extension popup (popup.html settings-panel)
+  "settings.extensionHeading": "Security",
+  "settings.extensionEncryptToggle": "Encrypt entries in extension storage",
+  "settings.extensionPassphrasePlaceholder": "New passphrase",
+  "settings.extensionPassphraseConfirmPlaceholder": "Confirm passphrase",
+  "settings.extensionPassphraseGuidance": "This vault is already encrypted. Use Change Passphrase to rotate your extension secret.",
+  "settings.extensionSave": "Save Security Settings",
+  // Change passphrase flow — shared by both platforms
+  "settings.changePassphraseTitle": "Change passphrase",
+  "settings.currentPassphraseLabel": "Current passphrase",
+  "settings.currentPassphrasePlaceholder": "Enter current passphrase",
+  "settings.newPassphraseLabel": "New passphrase",
+  "settings.newPassphrasePlaceholder": "Use a new strong passphrase",
+  "settings.confirmNewPassphraseLabel": "Confirm new passphrase",
+  "settings.confirmNewPassphrasePlaceholder": "Repeat new passphrase",
+  "settings.updatePassphrase": "Update Passphrase"
+};
+var reserved = {
+  "toast.vaultTitle": "Vault",
+  "toast.importTitle": "Import",
+  "toast.settingsTitle": "Settings",
+  "toast.copyFailed": "Could not copy OTP to clipboard",
+  "import.entryAdded": "Entry added",
+  "import.invalidUri": "Invalid URI",
+  "import.qrUrlRequired": "Please enter a QR image URL",
+  "import.readingQrFile": "Reading QR file...",
+  "import.fetchingQrUrl": "Fetching QR image URL..."
+};
+var catalogs = /* @__PURE__ */ new Map([[DEFAULT_LOCALE, { ...en, ...reserved }]]);
+var activeLocale = DEFAULT_LOCALE;
+function t(key, params) {
+  return interpolate(resolveTemplate(key), params);
+}
+function resolveTemplate(key) {
+  if (typeof key !== "string" || !key) return key;
+  const value = catalogs.get(activeLocale)?.[key] ?? catalogs.get(DEFAULT_LOCALE)?.[key];
+  return typeof value === "string" ? value : key;
+}
+function interpolate(template2, params) {
+  if (typeof template2 !== "string") return template2;
+  if (!params || typeof params !== "object") return template2;
+  return template2.replace(PLACEHOLDER_PATTERN, (match, name) => Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match);
+}
+
 // app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v3";
 var LEGACY_STORAGE_KEY = "personal_otp_vault_entries_v2";
@@ -11623,6 +11722,7 @@ var defaultSettings = {
   clearClipboard: false,
   autoLockMinutes: 15,
   timeDriftCheck: false,
+  theme: "system",
   sortBy: "pinned-alpha",
   groupBy: "none"
 };
@@ -11651,7 +11751,32 @@ var debugEvents = [];
 var importPreviewState = null;
 var backupImportState = null;
 initialize();
+function applyStaticStrings() {
+  const set = (id, key) => {
+    const node = document.getElementById(id);
+    if (node && typeof t(key) === "string") node.textContent = t(key);
+  };
+  const setPlaceholder = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.setAttribute("placeholder", t(key));
+  };
+  set("unlock-heading", "unlock.title");
+  set("unlock-btn", "unlock.button");
+  set("export-backup", "settings.exportBackup");
+  set("change-passphrase-btn", "settings.changePassphrase");
+  set("save-settings", "settings.save");
+  setPlaceholder("unlock-passphrase", "unlock.passphrasePlaceholder");
+  setPlaceholder("vault-passphrase", "settings.passphrasePlaceholder");
+  setPlaceholder("vault-passphrase-confirm", "settings.passphraseConfirmPlaceholder");
+  const passphraseLabel = document.querySelector("#encryption-fields label:first-child span");
+  if (passphraseLabel) passphraseLabel.textContent = t("settings.passphraseLabel");
+  const confirmLabel = document.querySelector("#encryption-fields label:nth-child(2) span");
+  if (confirmLabel) confirmLabel.textContent = t("settings.passphraseConfirmLabel");
+  const guidance = document.getElementById("passphrase-guidance");
+  if (guidance) guidance.textContent = t("settings.passphraseGuidance");
+}
 function initialize() {
+  applyStaticStrings();
   syncSettingsUI();
   applyVisualSettings();
   loadVaultOnStartup();
@@ -11691,6 +11816,8 @@ function syncSettingsUI() {
   encryptToggle.checked = settings.encrypt;
   const autoLockSelect = document.getElementById("auto-lock-select");
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes);
+  const themeSelect = document.getElementById("theme-select");
+  if (themeSelect) themeSelect.value = settings.theme || "system";
   const timeDriftToggle = document.getElementById("time-drift-toggle");
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
@@ -11714,6 +11841,12 @@ function syncSettingsUI() {
 function applyVisualSettings() {
   document.body.classList.toggle("blur-codes", settings.blurCodes);
   document.body.classList.toggle("screenshot-safe", settings.screenshotSafe);
+  const theme = settings.theme || "system";
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
 }
 function renderBiometricControls() {
   const section = document.getElementById("biometric-settings");
@@ -12303,6 +12436,64 @@ async function moveEntry(entryId, direction) {
   [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
   await replaceEntries(resequenceEntries(ordered));
 }
+var entryDragState = null;
+function cardMidpoints() {
+  return [...entriesRoot.querySelectorAll(".entry")].map(
+    (card) => card.getBoundingClientRect().top + card.offsetHeight / 2
+  );
+}
+function startEntryDrag(event, entry, node) {
+  if (settings.sortBy !== "custom" || event.button !== 0 || entryDragState) return;
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const fromIndex = ordered.findIndex((item) => item.id === entry.id);
+  if (fromIndex < 0 || ordered.length < 2) return;
+  event.preventDefault();
+  entryDragState = { entryId: entry.id, fromIndex, node };
+  node.classList.add("dragging");
+  document.body.classList.add("dragging-entry");
+  try {
+    node.setPointerCapture(event.pointerId);
+  } catch {
+  }
+  node.addEventListener("pointermove", moveEntryDrag);
+  node.addEventListener("pointerup", endEntryDrag);
+  node.addEventListener("pointercancel", endEntryDrag);
+}
+function moveEntryDrag(event) {
+  if (!entryDragState) return;
+  const hovered = [...entriesRoot.querySelectorAll(".entry")].find((card) => {
+    if (card === entryDragState.node) return false;
+    const rect = card.getBoundingClientRect();
+    return event.clientY >= rect.top && event.clientY <= rect.bottom;
+  });
+  [...entriesRoot.querySelectorAll(".entry")].forEach((card) => {
+    card.classList.toggle("drag-over", card === hovered);
+  });
+}
+async function endEntryDrag(event) {
+  const state = entryDragState;
+  if (!state) return;
+  entryDragState = null;
+  state.node.removeEventListener("pointermove", moveEntryDrag);
+  state.node.removeEventListener("pointerup", endEntryDrag);
+  state.node.removeEventListener("pointercancel", endEntryDrag);
+  state.node.classList.remove("dragging");
+  document.body.classList.remove("dragging-entry");
+  entriesRoot.querySelectorAll(".entry").forEach((card) => card.classList.remove("drag-over"));
+  const target = computeDropIndex(cardMidpoints(), state.fromIndex, event.clientY);
+  const ordered = [...entries].sort((left, right) => compareEntries(left, right, "custom"));
+  const currentIndex = ordered.findIndex((item) => item.id === state.entryId);
+  if (currentIndex < 0) return;
+  const [moved] = ordered.splice(currentIndex, 1);
+  ordered.splice(Math.min(target, ordered.length), 0, moved);
+  try {
+    await replaceEntries(resequenceEntries(ordered));
+    setImportStatus("Manual order updated", "success");
+  } catch (error) {
+    reportError("Drag reorder failed", error);
+    setImportStatus(toUserMessage(error, "Could not reorder entries"), "error");
+  }
+}
 function addCopyHistory(label, code) {
   copyHistory = [{
     label,
@@ -12363,6 +12554,13 @@ function createEntryNode(entry) {
   const pinBtn = node.querySelector(".pin");
   const removeBtn = node.querySelector(".remove");
   const selectBox = node.querySelector(".entry-select");
+  const dragHandle = node.querySelector(".drag-handle");
+  if (dragHandle) {
+    dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
+    dragHandle.addEventListener("pointerdown", (event) => {
+      startEntryDrag(event, entry, node);
+    });
+  }
   avatar.textContent = getIssuerInitials(entry.label);
   refreshEntryMetadata(node, entry);
   renderTagRow(node, entry);
@@ -12371,6 +12569,7 @@ function createEntryNode(entry) {
       const latestCode = node.dataset.otp;
       if (!latestCode) return;
       await navigator.clipboard.writeText(latestCode);
+      navigator.vibrate?.(20);
       addCopyHistory(entry.label, latestCode);
       copyBtn.textContent = "Copied";
       if (settings.clearClipboard) {
@@ -12519,6 +12718,8 @@ function renderEntries() {
         entryNodes.set(entry.id, node);
       }
       refreshEntryMetadata(node, entry);
+      const dragHandle = node.querySelector(".drag-handle");
+      if (dragHandle) dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
       node.classList.toggle("pinned", entry.pinned);
       node.querySelector(".pin").textContent = entry.pinned ? "Unpin" : "Pin";
       const selectBox = node.querySelector(".entry-select");
@@ -12538,6 +12739,7 @@ async function updateEntryNode(entry, now) {
   const code = node.querySelector(".entry-code");
   const seconds = node.querySelector(".entry-seconds");
   const bar = node.querySelector(".entry-bar");
+  const ring = node.querySelector(".ring-progress");
   const copyBtn = node.querySelector(".copy");
   try {
     let otp;
@@ -12545,12 +12747,14 @@ async function updateEntryNode(entry, now) {
       seconds.textContent = `counter #${entry.counter}`;
       bar.style.transform = "scaleX(1)";
       node.classList.toggle("urgent", false);
+      if (ring) ring.style.strokeDashoffset = "0";
       otp = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
     } else {
       const remaining = entry.period - now % entry.period;
       seconds.textContent = `${remaining}s left`;
       bar.style.transform = `scaleX(${remaining / entry.period})`;
       node.classList.toggle("urgent", remaining <= 10);
+      if (ring) ring.style.strokeDashoffset = String(100 - remaining / entry.period * 100);
       otp = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
     }
     code.textContent = formatCode(otp);
@@ -13153,6 +13357,7 @@ async function handleSaveSettings() {
     clearClipboard: clearClipboardToggle.checked,
     autoLockMinutes: Number(document.getElementById("auto-lock-select")?.value ?? settings.autoLockMinutes) || 0,
     timeDriftCheck: document.getElementById("time-drift-toggle")?.checked ?? settings.timeDriftCheck,
+    theme: document.getElementById("theme-select")?.value ?? settings.theme ?? "system",
     sortBy: sortSelect.value,
     groupBy: groupSelect.value
   };
@@ -13190,7 +13395,7 @@ async function handleSaveSettings() {
       clearPersistedEntries();
       syncSettingsUI();
       setLocked(false);
-      setSettingsStatus("Entries are now session-only", "success");
+      setSettingsStatus(t("settings.statusSessionOnly"), "success");
       vaultPassphraseInput.value = "";
       vaultPassphraseConfirmInput.value = "";
       return;
@@ -13212,7 +13417,7 @@ async function handleSaveSettings() {
   setLocked(false);
   const encryptedVaultExists = settings.persist && settings.encrypt && Boolean(currentPassphrase || localStorage.getItem(ENCRYPTED_VAULT_KEY));
   setSettingsStatus(
-    encryptedVaultExists ? "Encrypted vault saved. Use Change Passphrase to rotate your vault secret." : settings.encrypt ? "Encrypted vault saved" : "Device storage updated",
+    encryptedVaultExists ? t("settings.statusEncryptedVaultSaved") : settings.encrypt ? t("settings.statusEncryptedSaved") : t("settings.statusDeviceStorageUpdated"),
     "success"
   );
   vaultPassphraseInput.value = "";
@@ -13743,7 +13948,7 @@ function bindEvents() {
       );
       setChangePassphraseStatus("");
       changePassphraseDialog.close("accept");
-      setSettingsStatus("Vault passphrase updated", "success");
+      setSettingsStatus(t("settings.statusPassphraseUpdated"), "success");
     } catch (error) {
       setChangePassphraseStatus(toUserMessage(error, "Could not update passphrase"), "error");
     }
@@ -13758,14 +13963,14 @@ function bindEvents() {
       await stageBackupImport(file);
     } catch (error) {
       reportError("Backup import failed", error);
-      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
+      setSettingsStatus(toUserMessage(error, t("settings.statusImportFailed")), "error");
     } finally {
       importBackupInput.value = "";
     }
   });
   lockAppBtn.addEventListener("click", () => {
     if (!settings.encrypt) {
-      setSettingsStatus("Enable encrypted storage to use lock/unlock", "error");
+      setSettingsStatus(t("settings.statusLockRequiresEncryption"), "error");
       return;
     }
     lockVault();
@@ -13815,14 +14020,14 @@ function bindEvents() {
       await unlockVault(unlockPassphraseInput.value);
       writeUnlockGuard({ attempts: 0, lockedUntil: 0 });
       unlockPassphraseInput.value = "";
-      setUnlockStatus("Vault unlocked", "success");
+      setUnlockStatus(t("unlock.statusSuccess"), "success");
     } catch (error) {
       const attempts = guard.attempts + 1;
       const backoff = unlockBackoffSeconds(attempts);
       writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1e3 : 0 });
       const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
       reportError("Vault unlock failed", error);
-      setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted vault") + suffix, "error");
+      setUnlockStatus(toUserMessage(error, t("unlock.statusFailed")) + suffix, "error");
     } finally {
       operationDepth -= 1;
       unlockBtn.disabled = false;
@@ -13830,7 +14035,7 @@ function bindEvents() {
   });
   installAppBtn.addEventListener("click", async () => {
     if (!deferredInstallPrompt) {
-      setSettingsStatus("Install prompt is not available yet on this browser", "error");
+      setSettingsStatus(t("settings.statusInstallUnavailable"), "error");
       return;
     }
     await deferredInstallPrompt.prompt();
@@ -13871,7 +14076,7 @@ function bindEvents() {
       backupReviewDialog.close();
       setSettingsStatus("Backup imported", "success");
     } catch (error) {
-      setSettingsStatus(toUserMessage(error, "Could not import backup"), "error");
+      setSettingsStatus(toUserMessage(error, t("settings.statusImportFailed")), "error");
     }
   });
   backupImportMode?.addEventListener("change", () => {
