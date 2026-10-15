@@ -1,16 +1,17 @@
 # Project Roadmap
 
-Last updated: 2026-06-27
+Last updated: 2026-10-15
 
-## Current Status: Version 0.2.0
+## Current Status: Version 0.3.0
 
-The Personal OTP Vault is at v0.2.0 with the hardening wave shipped: KDF
+The Personal OTP Vault is at v0.3.0. The 0.2.0 hardening wave shipped KDF
 parameterization (600k PBKDF2 envelope), auto-lock and unlock throttling,
 HOTP + SHA-256/512 support, Google Authenticator migration import, undo-delete
 with tombstone, backup reminder, time-drift check, WebAuthn PRF biometric
 unlock (two-envelope DEK design), dark mode, drag & drop reorder, per-entry
 countdown rings, an accessibility pass, and an i18n framework — in both the
-PWA and the Chrome extension.
+PWA and the Chrome extension. 0.3.0 rebuilt both frontends on a shared
+token-based design system with a codes-first app shell.
 
 ## Completed Features (Done)
 
@@ -33,6 +34,7 @@ PWA and the Chrome extension.
 - ✅ **Visual Feedback**: Per-entry countdown rings, urgent indicators, dark mode (System/Light/Dark)
 - ✅ **Accessibility**: Axe-scanned views (zero criticals), keyboard-reachable controls, announced toasts
 - ✅ **i18n Framework**: `lib/i18n.js` English catalog; unlock + settings areas read strings via `t()`
+- ✅ **Product UI Redesign (0.3.0)**: both frontends on one token system (oklch color ramps, 4pt spacing, type scale, control heights, radius + motion tokens); compact codes-first shell with slide-over sheets for add/import, settings, and copy history
 
 ### Testing and Quality Assurance
 - ✅ **Unit Tests**: Vitest coverage for `lib/` modules
@@ -50,7 +52,7 @@ PWA and the Chrome extension.
 
 ## In Progress (None Confirmed)
 
-No confirmed in-progress items at this time. The project is in maintenance mode for v0.1.x while gathering user feedback and usage patterns.
+No confirmed in-progress items at this time. The project is in maintenance mode while gathering user feedback and usage patterns.
 
 ## Future Themes (Proposals)
 
@@ -134,10 +136,9 @@ authenticators).
 Shipped: tokenized design tokens with a dark theme default and a
 System/Light/Dark toggle, vendored Space Grotesk + IBM Plex Mono fonts,
 per-entry countdown rings, drag & drop reorder, and an axe-core accessibility
-pass with zero critical violations. Remaining follow-up ideas: additional
+pass with zero critical violations. The 0.3.0 redesign rebuilt the visual
+layer on the shared token system. Remaining follow-up ideas: additional
 themes and motion refinements (both respect `prefers-reduced-motion`).
-- Dark mode optimization
-- Customizable themes
 
 **Implementation Considerations**:
 - Impact on visual regression tests
