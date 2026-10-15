@@ -116,15 +116,30 @@ test("per-entry countdown ring tracks the remaining period", async ({ page }) =>
   await loadApp(page);
   await addEntry(page, "Ring:user@example.com", PRIMARY_SECRET);
 
-  const ring = page.locator(".entry .ring-progress").first();
-  await expect(ring).toBeVisible();
-  const first = await ring.evaluate((node) => Number(node.style.strokeDashoffset));
+  // The ring offset and the seconds label are written in the same update
+  // pass with dashoffset = 100 - 100 * remaining / period (pathLength 100).
+  // Assert that invariant directly instead of racing a 1s tick, which made
+  // this test flaky on loaded CI runners.
+  const read = () =>
+    page.evaluate(() => {
+      const entry = document.querySelector(".entry");
+      const seconds = parseInt(entry.querySelector(".entry-seconds").textContent || "", 10);
+      const offset = Number(entry.querySelector(".ring-progress").style.strokeDashoffset);
+      return { seconds, offset };
+    });
 
-  await page.waitForTimeout(1100);
-  const second = await ring.evaluate((node) => Number(node.style.strokeDashoffset));
+  let sample;
+  await expect
+    .poll(async () => {
+      sample = await read();
+      return Number.isFinite(sample.seconds) && Number.isFinite(sample.offset) && sample.offset !== 0;
+    }, { timeout: 5_000 })
+    .toBe(true);
 
-  expect(Number.isFinite(first)).toBe(true);
-  expect(second).not.toBe(first);
+  const expected = 100 - (100 * sample.seconds) / 30;
+  // Slack covers reading label and style across one 1s tick boundary
+  // (one tick = 100/30 = 3.33 offset units).
+  expect(Math.abs(sample.offset - expected)).toBeLessThanOrEqual(4);
 });
 
 test("copying an entry announces and records the code", async ({ page, context }) => {

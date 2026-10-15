@@ -10,7 +10,7 @@
     "build": "npm run verify:version && npm run build:icons && node ./scripts/build.mjs",
     "serve:test": "http-server . -p 4173 -c-1 --silent",
     "test:unit": "npm run build && vitest run",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "npm run build && playwright test --project=web && playwright test --project=extension --workers=1",
     "test": "npm run test:unit && npm run test:e2e",
     "test:ci": "npm run test"
   },
