@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 const FIXED_NOW = 1_700_000_000_000;
 const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -20,10 +22,13 @@ async function loadApp(page) {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
+  await page.locator("#open-add-dialog").click();
   await expect(page.locator("#secret")).toBeVisible();
+  await page.keyboard.press("Escape");
 }
 
 async function addEntry(page, { label, secret }, second = null) {
+  await openAddSheet(page);
   await page.locator("#secret").fill(secret);
   await page.locator("#label").fill(label);
   await page.getByRole("button", { name: "Save Entry" }).click();
@@ -68,10 +73,12 @@ test("undo expires after 10 seconds and purges the tombstone", async ({ page }) 
 
 test("undo survives a page reload via the tombstone", async ({ page }) => {
   await loadApp(page);
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await page.getByRole("button", { name: "I Understand" }).click();
   await expect(page.locator("#settings-status")).toContainText("Device storage updated");
+  await page.keyboard.press("Escape");
 
   await addEntry(page, { label: "Persisted:user@example.com", secret: PRIMARY_SECRET });
   await expect(page.locator(".entry")).toHaveCount(1);
@@ -81,7 +88,9 @@ test("undo survives a page reload via the tombstone", async ({ page }) => {
   await expect(page.locator(".entry")).toHaveCount(0);
 
   await page.reload();
+  await page.locator("#open-add-dialog").click();
   await expect(page.locator("#secret")).toBeVisible();
+  await page.keyboard.press("Escape");
   const undoToast = page.locator(".toast.undo");
   await expect(undoToast).toBeVisible();
   await undoToast.getByRole("button", { name: "Undo" }).click();
@@ -97,6 +106,7 @@ test("backup reminder appears after 30 days and clears on export", async ({ page
   // Stale lastBackupAt (31 days ago) still warns; fresh stamp clears it.
   // Persist the vault first so entries survive the reload (an empty vault
   // legitimately has nothing at risk).
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await page.getByRole("button", { name: "I Understand" }).click();
@@ -111,6 +121,7 @@ test("backup reminder appears after 30 days and clears on export", async ({ page
   await expect(page.locator(".entry")).toHaveCount(1);
   await expect(page.locator("#backup-reminder-banner")).toBeVisible();
 
+  await openSettingsSheet(page);
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export Backup" }).click();
   const download = await downloadPromise;
@@ -123,6 +134,7 @@ test("backup reminder appears after 30 days and clears on export", async ({ page
 
 test("time drift warns past 5 seconds and stays silent within", async ({ page }) => {
   await loadApp(page);
+  await openSettingsSheet(page);
   await page.locator("#time-drift-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
 
@@ -151,7 +163,9 @@ test("time drift warns past 5 seconds and stays silent within", async ({ page })
       body: "",
     });
   });
+  await page.keyboard.press("Escape");
   await page.locator("#drift-dismiss").click();
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Check clock now" }).click();
   await expect(page.locator("#drift-banner")).toBeHidden();
 });

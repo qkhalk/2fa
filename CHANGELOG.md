@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.3.0 — Product UI Redesign
+
+A full visual redesign of both the web app and the extension popup, executed as
+a product UI rather than a landing page. The vault's identity (warm charcoal,
+cream text, signal orange) is kept; everything else is rebuilt on a disciplined
+token system.
+
+### Changed
+
+- **Codes-first app shell**: the marketing hero, decorative signal module and
+  halo glows are gone. A compact sticky top bar (brand, search, global timer,
+  history, install, lock, settings, add) keeps OTP codes within one glance.
+- **Compact entry rows**: oversized cards replaced with quiet hairline rows —
+  one-line issuer/account, large mono code, inline countdown ring. Secondary
+  actions (Edit, Reveal, Pin, Up, Down, Remove, drag) appear on hover/focus
+  (always on touch); Copy stays permanently visible.
+- **Add & import moved into a slide-over sheet** with tabs (Manual / Paste /
+  QR / Camera); the sheet closes after a successful save.
+- **Settings moved into its own slide-over sheet** with a marked danger zone
+  for Clear All.
+- **Copy history moved into a sheet** opened from the top bar with a live
+  count badge.
+- **New token system** (oklch color ramps, 4pt spacing, type scale, control
+  heights, single radius family, motion tokens) shared by web app and
+  extension; dark default with light/system themes kept in sync.
+- Extension popup restyled with the same tokens: compact header, tighter
+  cards, same countdown ring language.
+- Service worker cache bumped to `otp-vault-cache-v7`.
+
+### Fixed
+
+- Contrast: small UI labels now meet 4.5:1 in both themes.
+- Summary stats, sort/group controls and the offline chip consolidated into
+  one toolbar row instead of card grids.
+
 ## 0.2.0 — Hardening & Polish Wave
 
 Everything in this release shipped for BOTH the web app (PWA) and the Chrome

@@ -12002,6 +12002,10 @@ function lockVault() {
     importPreviewState = null;
     importDialog?.close?.();
   }
+  for (const id of ["add-dialog", "settings-dialog", "history-dialog"]) {
+    const sheet = document.getElementById(id);
+    if (sheet?.open) sheet.close();
+  }
   clearPendingUndo();
   purgeUndoTombstone();
   hideDriftBanner();
@@ -12142,17 +12146,19 @@ function renderCopyHistory() {
     empty.className = "history-empty";
     empty.textContent = "No copied codes yet. The last few copied OTPs appear here for quick recall.";
     copyHistoryRoot.appendChild(empty);
-    return;
+  } else {
+    for (const item of copyHistory) {
+      const row = document.createElement("li");
+      const strong = document.createElement("strong");
+      strong.textContent = item.label;
+      const span = document.createElement("span");
+      span.textContent = `${item.code} \u2022 ${item.at}`;
+      row.append(strong, span);
+      copyHistoryRoot.appendChild(row);
+    }
   }
-  for (const item of copyHistory) {
-    const row = document.createElement("li");
-    const strong = document.createElement("strong");
-    strong.textContent = item.label;
-    const span = document.createElement("span");
-    span.textContent = `${item.code} \u2022 ${item.at}`;
-    row.append(strong, span);
-    copyHistoryRoot.appendChild(row);
-  }
+  const historyCount = document.getElementById("history-count");
+  if (historyCount) historyCount.textContent = String(copyHistory.length);
 }
 function renderDebugFeed() {
   if (!debugList) return;
@@ -12491,18 +12497,28 @@ function addCopyHistory(label, code) {
   }, ...copyHistory.filter((item) => item.label !== label)].slice(0, 6);
   renderCopyHistory();
 }
+function openAddDialog(tab) {
+  const dialog = document.getElementById("add-dialog");
+  if (!dialog) return;
+  setImportStatus("");
+  if (!dialog.open) dialog.showModal();
+  if (tab) {
+    const radio = document.getElementById(`tab-${tab}`);
+    if (radio) radio.checked = true;
+  }
+}
 function showEmptyState(message, heading = "Vault ready for the first import") {
   entriesRoot.innerHTML = "";
   entriesRoot.innerHTML = `
     <section class="workspace-empty">
       <div class="workspace-empty-copy">
-        <p class="entry-group-title">workspace</p>
+        <p class="empty-kicker">vault</p>
         <h3>${heading}</h3>
         <p>${message}</p>
         <div class="workspace-empty-actions">
-          <button type="button" class="btn small" data-empty-action="focus-secret">Type a secret</button>
-          <button type="button" class="btn small" data-empty-action="focus-uri">Paste OTP URI</button>
-          <button type="button" class="btn small" data-empty-action="start-camera">Scan a QR</button>
+          <button type="button" class="btn primary" data-empty-action="focus-secret">Add your first entry</button>
+          <button type="button" class="btn ghost" data-empty-action="focus-uri">Paste a URI</button>
+          <button type="button" class="btn ghost" data-empty-action="start-camera">Scan a QR code</button>
         </div>
       </div>
       <div class="workspace-empty-guide">
@@ -12523,9 +12539,18 @@ function showEmptyState(message, heading = "Vault ready for the first import") {
   entriesRoot.querySelectorAll("[data-empty-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.getAttribute("data-empty-action");
-      if (action === "focus-secret") secretInput.focus();
-      if (action === "focus-uri") uriInput.focus();
-      if (action === "start-camera") startCameraBtn.click();
+      if (action === "focus-secret") {
+        openAddDialog("manual");
+        secretInput.focus();
+      }
+      if (action === "focus-uri") {
+        openAddDialog("paste");
+        uriInput.focus();
+      }
+      if (action === "start-camera") {
+        openAddDialog("camera");
+        startCameraBtn.click();
+      }
     });
   });
 }
@@ -13614,6 +13639,7 @@ async function startCameraScan() {
   cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
   cameraPreview.srcObject = cameraStream;
   await cameraPreview.play();
+  stopCameraBtn.disabled = false;
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   cameraScanTimer = setInterval(async () => {
@@ -13656,6 +13682,7 @@ function stopCameraScan() {
   }
   cameraStream = null;
   cameraPreview.srcObject = null;
+  stopCameraBtn.disabled = true;
 }
 function registerPwaSupport() {
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -13719,6 +13746,7 @@ function bindEvents() {
       counterField?.classList.add("hidden");
       syncSettingsUI();
       setImportStatus("Entry added", "success");
+      document.getElementById("add-dialog")?.close();
     } catch (error) {
       reportError("Manual entry failed", error);
       setImportStatus(toUserMessage(error, "Could not add entry"), "error");
@@ -13762,6 +13790,10 @@ function bindEvents() {
   qrFileInput.addEventListener("change", async () => {
     const [file] = qrFileInput.files || [];
     if (!file) return;
+    const fileNameLabel = document.getElementById("qr-file-name");
+    const fileBtn = qrFileInput.closest(".file-btn");
+    if (fileNameLabel) fileNameLabel.textContent = file.name;
+    fileBtn?.classList.add("has-file");
     setImportStatus("Reading QR file...");
     try {
       await importFromQrBlob(file, "QR file");
@@ -13770,6 +13802,8 @@ function bindEvents() {
       setImportStatus(toUserMessage(error, "Failed to import QR file"), "error");
     } finally {
       qrFileInput.value = "";
+      if (fileNameLabel) fileNameLabel.textContent = "Choose image file\u2026";
+      fileBtn?.classList.remove("has-file");
     }
   });
   importQrUrlBtn.addEventListener("click", async () => {
@@ -13964,6 +13998,26 @@ function bindEvents() {
     }
     lockVault();
   });
+  const settingsDialog = document.getElementById("settings-dialog");
+  const historyDialog = document.getElementById("history-dialog");
+  document.getElementById("open-add-dialog")?.addEventListener("click", () => openAddDialog("manual"));
+  document.getElementById("open-settings-dialog")?.addEventListener("click", () => settingsDialog?.showModal());
+  document.getElementById("open-history-dialog")?.addEventListener("click", () => historyDialog?.showModal());
+  document.querySelectorAll("[data-sheet-close]").forEach((button) => {
+    button.addEventListener("click", () => button.closest("dialog")?.close());
+  });
+  document.getElementById("add-dialog")?.addEventListener("close", stopCameraScan);
+  for (const sheetId of ["add-dialog", "settings-dialog", "history-dialog"]) {
+    const sheet = document.getElementById(sheetId);
+    if (!sheet) continue;
+    let backdropPointerDown = false;
+    sheet.addEventListener("pointerdown", (event) => {
+      backdropPointerDown = event.target === sheet;
+    });
+    sheet.addEventListener("click", (event) => {
+      if (event.target === sheet && backdropPointerDown) sheet.close();
+    });
+  }
   document.getElementById("biometric-unlock-btn")?.addEventListener("click", () => {
     unlockWithBiometrics();
   });

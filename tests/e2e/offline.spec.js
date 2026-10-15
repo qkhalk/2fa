@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 test.use({ serviceWorkers: "allow" });
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -27,9 +29,11 @@ test("app shell and persisted entries remain usable offline after the first onli
   await page.evaluate(() => localStorage.clear());
   await page.reload();
 
+  await openAddSheet(page);
   await page.locator("#secret").fill(PRIMARY_SECRET);
   await page.locator("#label").fill("Offline:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#save-settings").click();
   await expect(page.locator("#privacy-dialog")).toBeVisible();
@@ -61,10 +65,12 @@ test("encrypted persisted vault unlocks and renders entries offline after reload
   await page.evaluate(() => localStorage.clear());
   await page.reload();
 
+  await openAddSheet(page);
   await page.locator("#secret").fill(PRIMARY_SECRET);
   await page.locator("#label").fill("SecureOffline:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);

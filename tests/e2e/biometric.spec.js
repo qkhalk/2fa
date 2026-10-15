@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 const FIXED_NOW = 1_700_000_000_000;
 const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
 const PASSPHRASE = "correct horse battery";
@@ -105,6 +107,7 @@ async function loadApp(page) {
 }
 
 async function addEntry(page, { label, secret }) {
+  await openAddSheet(page);
   await page.locator("#secret").fill(secret);
   await page.locator("#label").fill(label);
   await page.getByRole("button", { name: "Save Entry" }).click();
@@ -119,6 +122,7 @@ async function acceptPersistWarning(page) {
 async function createEncryptedVault(page) {
   await loadApp(page);
   await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -187,6 +191,7 @@ test("biometric unlock holds the DEK so mutations persist across reloads", async
   const passphraseAfterEnroll = await page.evaluate(() => localStorage.getItem("personal_otp_vault_settings_v3"));
   expect(passphraseAfterEnroll).not.toContain(PASSPHRASE);
 
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault", exact: true }).click();
   await expect(page.locator("#unlock-panel")).toBeVisible();
   await expect(page.locator("#biometric-unlock-btn")).toBeVisible();
@@ -212,6 +217,7 @@ test("exports a passphrase-restorable standard envelope in biometric mode", asyn
   await page.locator("#enroll-biometric-btn").click();
   await expect(page.locator("#settings-status")).toContainText("Biometric unlock enabled");
 
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault", exact: true }).click();
   await page.locator("#biometric-unlock-btn").click();
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked with biometrics");
@@ -219,6 +225,7 @@ test("exports a passphrase-restorable standard envelope in biometric mode", asyn
   // FR12: the export is gated behind one passphrase re-entry (prompt).
   page.once("dialog", (dialog) => dialog.accept(PASSPHRASE));
   const downloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const download = await downloadPromise;
   const backup = JSON.parse(await readFile(await download.path(), "utf8"));
@@ -231,6 +238,7 @@ test("exports a passphrase-restorable standard envelope in biometric mode", asyn
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await addEntry(page, { label: "Seed:before@restore.dev", secret: "MFRGGZDFMZTWQ2LK" });
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "biometric-backup.json",
     mimeType: "application/json",
@@ -254,12 +262,14 @@ test("rejects the requirePassphrase gate when the wrong passphrase is entered", 
   await page.locator("#enroll-biometric-btn").click();
   await expect(page.locator("#settings-status")).toContainText("Biometric unlock enabled");
 
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault", exact: true }).click();
   await page.locator("#biometric-unlock-btn").click();
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked with biometrics");
 
   page.once("dialog", (dialog) => dialog.accept("totally wrong passphrase"));
   const downloadPromise = page.waitForEvent("download", { timeout: 3000 }).catch(() => null);
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   expect(await downloadPromise).toBeNull();
   await expect(page.locator("#settings-status")).toContainText("Incorrect passphrase");
@@ -272,12 +282,14 @@ test("passphrase change in biometric mode re-wraps the DEK without breaking biom
   await page.locator("#enroll-biometric-btn").click();
   await expect(page.locator("#settings-status")).toContainText("Biometric unlock enabled");
 
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault", exact: true }).click();
   await page.locator("#biometric-unlock-btn").click();
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked with biometrics");
 
   // FR12 gate prompts once for the current passphrase, then the re-wrap runs.
   page.once("dialog", (dialog) => dialog.accept(PASSPHRASE));
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Change Passphrase" }).click();
   await page.locator("#current-passphrase").fill(PASSPHRASE);
   await page.locator("#new-passphrase").fill(NEW_PASSPHRASE);
@@ -305,6 +317,7 @@ test("passphrase change in biometric mode re-wraps the DEK without breaking biom
   await expect(page.locator(".entry")).toHaveCount(1);
 
   // And the new passphrase unlocks too.
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault", exact: true }).click();
   await page.locator("#unlock-passphrase").fill(NEW_PASSPHRASE);
   await page.getByRole("button", { name: "Unlock Vault" }).click();

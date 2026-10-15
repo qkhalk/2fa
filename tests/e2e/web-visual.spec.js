@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 test.skip(process.platform !== "win32", "Visual snapshots are currently pinned for local Windows rendering.");
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -46,10 +48,12 @@ test("web home locked state desktop visual regression", async ({ page }) => {
   const passphrase = "correct horse battery";
 
   await loadStableHome(page, { width: 1440, height: 1000 });
+  await openAddSheet(page);
   await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
   await page.locator("#label").fill("Locked:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(passphrase);
@@ -58,6 +62,7 @@ test("web home locked state desktop visual regression", async ({ page }) => {
   await expect(page.locator("#privacy-dialog")).toBeVisible();
   await page.getByRole("button", { name: "I Understand" }).click();
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+  await page.keyboard.press("Escape");
 
   await page.reload();
   await expect(page.locator("#unlock-panel")).toBeVisible();
@@ -71,10 +76,12 @@ test("web home locked state desktop visual regression", async ({ page }) => {
 
 test("web home populated state desktop visual regression", async ({ page }) => {
   await loadStableHome(page, { width: 1440, height: 1000 });
+  await openAddSheet(page);
   await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
   await page.locator("#label").fill("Alpha:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
 
+  await openAddSheet(page);
   await page.locator("#secret").fill("NB2W45DFOIZA====");
   await page.locator("#label").fill("Beta:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
@@ -88,6 +95,7 @@ test("web home populated state desktop visual regression", async ({ page }) => {
 
 test("web home search no-results desktop visual regression", async ({ page }) => {
   await loadStableHome(page, { width: 1440, height: 1000 });
+  await openAddSheet(page);
   await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
   await page.locator("#label").fill("Alpha:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
@@ -104,9 +112,11 @@ test("web home search no-results desktop visual regression", async ({ page }) =>
 // Light-theme variants (Phase 7 FR2): the explicit Light toggle drives
 // data-theme="light"; the dark variants above cover the default theme.
 async function applyLightTheme(page) {
+  await openSettingsSheet(page);
   await page.locator("#theme-select").selectOption("light");
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
 }
 
 test("web home empty state desktop light theme visual regression", async ({ page }) => {
@@ -123,13 +133,16 @@ test("web home locked state desktop light theme visual regression", async ({ pag
   const passphrase = "correct horse battery";
 
   await loadStableHome(page, { width: 1440, height: 1000 });
+  await openSettingsSheet(page);
   await page.locator("#theme-select").selectOption("light");
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openAddSheet(page);
   await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
   await page.locator("#label").fill("Locked:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(passphrase);
@@ -138,6 +151,7 @@ test("web home locked state desktop light theme visual regression", async ({ pag
   await expect(page.locator("#privacy-dialog")).toBeVisible();
   await page.getByRole("button", { name: "I Understand" }).click();
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+  await page.keyboard.press("Escape");
 
   await page.reload();
   await expect(page.locator("#unlock-panel")).toBeVisible();
@@ -152,10 +166,12 @@ test("web home locked state desktop light theme visual regression", async ({ pag
 test("web home populated state desktop light theme visual regression", async ({ page }) => {
   await loadStableHome(page, { width: 1440, height: 1000 });
   await applyLightTheme(page);
+  await openAddSheet(page);
   await page.locator("#secret").fill("JBSWY3DPEHPK3PXP");
   await page.locator("#label").fill("Alpha:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();
 
+  await openAddSheet(page);
   await page.locator("#secret").fill("NB2W45DFOIZA====");
   await page.locator("#label").fill("Beta:user@example.com");
   await page.getByRole("button", { name: "Save Entry" }).click();

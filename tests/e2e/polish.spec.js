@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
 
 async function loadApp(page) {
@@ -10,6 +12,7 @@ async function loadApp(page) {
 }
 
 async function addEntry(page, label, secret) {
+  await openAddSheet(page);
   await page.locator("#secret").fill(secret);
   await page.locator("#label").fill(label);
   await page.getByRole("button", { name: "Save Entry" }).click();
@@ -19,6 +22,7 @@ async function addEntry(page, label, secret) {
 test("theme select applies data-theme without reload and persists", async ({ page }) => {
   await loadApp(page);
 
+  await openSettingsSheet(page);
   await page.locator("#theme-select").selectOption("light");
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   // A fresh vault is session-only; the important part is that the theme
@@ -45,6 +49,7 @@ test("theme select applies data-theme without reload and persists", async ({ pag
 
 test("system theme follows prefers-color-scheme emulation", async ({ page }) => {
   await loadApp(page);
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await expect(page.locator("html")).not.toHaveAttribute("data-theme", /.+/);
 
@@ -61,11 +66,13 @@ test("drag and drop reorders entries and the order persists", async ({ page }) =
   await addEntry(page, "Gamma:user@example.com", "MFRGGZDFMZTWQ2LK");
 
   // Persist the vault so the order survives the reload below.
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await expect(page.locator("#privacy-dialog")).toBeVisible();
   await page.getByRole("button", { name: "I Understand" }).click();
   await expect(page.locator("#settings-status")).toContainText("Device storage updated");
+  await page.keyboard.press("Escape");
 
   // A tall viewport keeps every card visible: manual mouse drags use
   // viewport coordinates, and clamped off-screen pointers land on nothing.
@@ -109,15 +116,30 @@ test("per-entry countdown ring tracks the remaining period", async ({ page }) =>
   await loadApp(page);
   await addEntry(page, "Ring:user@example.com", PRIMARY_SECRET);
 
-  const ring = page.locator(".entry .ring-progress").first();
-  await expect(ring).toBeVisible();
-  const first = await ring.evaluate((node) => Number(node.style.strokeDashoffset));
+  // The ring offset and the seconds label are written in the same update
+  // pass with dashoffset = 100 - 100 * remaining / period (pathLength 100).
+  // Assert that invariant directly instead of racing a 1s tick, which made
+  // this test flaky on loaded CI runners.
+  const read = () =>
+    page.evaluate(() => {
+      const entry = document.querySelector(".entry");
+      const seconds = parseInt(entry.querySelector(".entry-seconds").textContent || "", 10);
+      const offset = Number(entry.querySelector(".ring-progress").style.strokeDashoffset);
+      return { seconds, offset };
+    });
 
-  await page.waitForTimeout(1100);
-  const second = await ring.evaluate((node) => Number(node.style.strokeDashoffset));
+  let sample;
+  await expect
+    .poll(async () => {
+      sample = await read();
+      return Number.isFinite(sample.seconds) && Number.isFinite(sample.offset) && sample.offset !== 0;
+    }, { timeout: 5_000 })
+    .toBe(true);
 
-  expect(Number.isFinite(first)).toBe(true);
-  expect(second).not.toBe(first);
+  const expected = 100 - (100 * sample.seconds) / 30;
+  // Slack covers reading label and style across one 1s tick boundary
+  // (one tick = 100/30 = 3.33 offset units).
+  expect(Math.abs(sample.offset - expected)).toBeLessThanOrEqual(4);
 });
 
 test("copying an entry announces and records the code", async ({ page, context }) => {
@@ -134,6 +156,7 @@ test("axe reports no critical violations on locked, unlocked, and settings views
   // Locked view: seed an encrypted vault by UI, then reload into locked state.
   await loadApp(page);
   await addEntry(page, "A11y:user@example.com", PRIMARY_SECRET);
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill("correct horse battery");

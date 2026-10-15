@@ -2,6 +2,8 @@ import QRCode from "qrcode";
 
 import { expect, test } from "@playwright/test";
 
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
+
 const PASSPHRASE = "correct horse battery";
 const OTP_URI = "otpauth://totp/E2E:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=E2E&digits=6&period=30";
 
@@ -34,16 +36,17 @@ async function loadAppWithClock(page, { rate = 1 } = {}) {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await expect(page.locator("#secret")).toBeVisible();
 }
 
 async function addEntry(page, { label, secret }) {
+  await openAddSheet(page);
   await page.locator("#secret").fill(secret);
   await page.locator("#label").fill(label);
   await page.getByRole("button", { name: "Save Entry" }).click();
 }
 
 async function enableEncryptedPersistence(page) {
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -53,6 +56,7 @@ async function enableEncryptedPersistence(page) {
   await expect(page.locator("#privacy-dialog")).toBeVisible();
   await page.getByRole("button", { name: "I Understand" }).click();
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
+  await page.keyboard.press("Escape");
 }
 
 test("locks the vault after the idle timeout and requires the passphrase again", async ({ page }) => {
@@ -156,6 +160,8 @@ test("QR image URL import keeps working under the CSP connect-src policy", async
     body: pngBuffer,
   }));
 
+  await page.locator("#open-add-dialog").click();
+  await page.locator('label[for="tab-qr"]').click();
   await page.locator("#qr-url").fill("http://127.0.0.1:4173/fixture-qr.png");
   await page.getByRole("button", { name: "Import", exact: true }).click();
   await expect(page.locator("#import-dialog")).toBeVisible({ timeout: 10_000 });

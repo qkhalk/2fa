@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 import { createEncryptedBackup, encryptEntries } from "../../lib/vault.js";
+import { openAddSheet, openSettingsSheet } from "./helpers.js";
 
 const FIXED_NOW = 1_700_000_000_000;
 const PRIMARY_SECRET = "JBSWY3DPEHPK3PXP";
@@ -33,6 +34,7 @@ async function loadApp(page) {
 }
 
 async function addEntry(page, { label, secret, digits = "6", period = "30" }) {
+  await openAddSheet(page);
   await page.locator("#secret").fill(secret);
   await page.locator("#label").fill(label);
   await page.locator("#digits").selectOption(digits);
@@ -62,6 +64,7 @@ test("rejects invalid manual input and invalid URI false positives", async ({ pa
   await addEntry(page, { label: "Broken", secret: "NOT-BASE32!" });
   await expect(page.locator("#import-status")).toContainText("Secret contains invalid Base32 characters");
 
+  await openAddSheet(page, "paste");
   await page.locator("#uri").fill("otpauth://totp/Foo:bar?secret=BAD*&digits=6&period=30");
   await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
   await expect(page.locator("#import-status")).toContainText("No valid otpauth:// URI found");
@@ -70,6 +73,7 @@ test("rejects invalid manual input and invalid URI false positives", async ({ pa
 test("imports OTP URIs from surrounding text and supports search, pin, and remove", async ({ page }) => {
   await loadApp(page);
 
+  await openAddSheet(page, "paste");
   await page.locator("#uri").fill(
     "Please import otpauth://totp/Example:user@example.com?secret=JBSWY3DPEHPK3PXP&period=30&digits=6."
   );
@@ -108,6 +112,7 @@ test("persists encrypted vaults and unlocks after reload", async ({ page }) => {
   await loadApp(page);
   await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -159,15 +164,18 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
 
   const plainDownloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const plainDownload = await plainDownloadPromise;
   const plainBackup = await readFile(await plainDownload.path());
 
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "plain-backup.json",
     mimeType: "application/json",
@@ -178,6 +186,7 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   await expect(page.locator("#settings-status")).toContainText("Backup imported");
   await expect(page.locator(".entry")).toHaveCount(1);
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -186,14 +195,17 @@ test("exports and reimports backups in plain and encrypted modes", async ({ page
   await acceptPersistWarning(page);
 
   const encryptedDownloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const encryptedDownload = await encryptedDownloadPromise;
   const encryptedBackup = await readFile(await encryptedDownload.path());
 
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
   page.once("dialog", (dialog) => dialog.accept(PASSPHRASE));
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "encrypted-backup.json",
     mimeType: "application/json",
@@ -229,6 +241,7 @@ test("keeps web settings and storage mode unchanged when encrypted save fails", 
   });
   await addEntry(page, { label: "GitHub:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -280,6 +293,7 @@ test("removes partial encrypted artifacts when cleanup fails after encrypted wri
   await page.goto("/");
   await expect(page.locator(".entry")).toHaveCount(1);
 
+  await openSettingsSheet(page);
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
   await page.locator("#vault-passphrase-confirm").fill(PASSPHRASE);
@@ -304,6 +318,7 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   await loadApp(page);
   await addEntry(page, { label: "Original:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -328,12 +343,14 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   await expect(page.locator("#unlock-panel")).toBeHidden();
 
   const originalDownloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const originalDownload = await originalDownloadPromise;
   const originalBackup = await readFile(await originalDownload.path());
 
   await page.evaluate(() => { window.__blockNextEncryptedWrite = true; });
 
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "encrypted-backup.json",
     mimeType: "application/json",
@@ -351,6 +368,7 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   await expect(page.locator("#backup-review-dialog")).toBeHidden();
 
   const verifyDownloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const verifyDownload = await verifyDownloadPromise;
   const verifyBackup = await readFile(await verifyDownload.path());
@@ -358,11 +376,13 @@ test("rolls back entries and passphrase when encrypted backup import persistence
   const verifyBackupParsed = JSON.parse(new TextDecoder().decode(verifyBackup));
   expect(verifyBackupParsed.encrypted).toBe(true);
 
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator(".entry")).toHaveCount(0);
 
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "verify-backup.json",
     mimeType: "application/json",
@@ -415,6 +435,7 @@ test("preserves entries when clear all persistence fails", async ({ page }) => {
   await expect(page.locator(".entry")).toHaveCount(1);
 
   await page.evaluate(() => { window.__blockNextPlainWrite = true; });
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Clear All" }).click();
   await expect(page.locator("#confirm-dialog")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
@@ -431,11 +452,13 @@ test("preserves entries when replace-mode backup import persistence fails", asyn
   await addEntry(page, { label: "Survivor:user@example.com", secret: PRIMARY_SECRET });
   await expect(page.locator(".entry")).toHaveCount(1);
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
   await acceptPersistWarning(page);
 
   const downloadPromise = page.waitForEvent("download");
+  await openSettingsSheet(page);
   await page.getByRole("button", { name: "Export Backup" }).click();
   const download = await downloadPromise;
   const backup = await readFile(await download.path());
@@ -452,6 +475,7 @@ test("preserves entries when replace-mode backup import persistence fails", asyn
     };
   });
 
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "plain-backup.json",
     mimeType: "application/json",
@@ -477,6 +501,7 @@ test("web security form must not silently change active passphrase for existing 
   await loadApp(page);
   await addEntry(page, { label: "Passphrase:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(originalPassphrase);
@@ -506,6 +531,7 @@ test("web dedicated passphrase change updates unlock passphrase", async ({ page 
   await loadApp(page);
   await addEntry(page, { label: "Passphrase:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(originalPassphrase);
@@ -535,6 +561,7 @@ test("web lock clears stale unlock success status", async ({ page }) => {
   await loadApp(page);
   await addEntry(page, { label: "Status:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -543,6 +570,7 @@ test("web lock clears stale unlock success status", async ({ page }) => {
   await acceptPersistWarning(page);
   await expect(page.locator("#settings-status")).toContainText("Encrypted vault saved");
 
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Lock Vault" }).click();
   await expect(page.locator("#unlock-panel")).toBeVisible();
   await expect(page.locator("#unlock-status")).toHaveText("");
@@ -552,6 +580,7 @@ test("web encrypted vault hides primary passphrase fields and directs users to c
   await loadApp(page);
   await addEntry(page, { label: "Passphrase:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -568,6 +597,7 @@ test("web encrypted vault hides primary passphrase fields and directs users to c
 test("web privacy warning keeps focus on missing passphrase requirement before acceptance", async ({ page }) => {
   await loadApp(page);
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.getByRole("button", { name: "Save Privacy Settings" }).click();
@@ -583,6 +613,7 @@ test("encrypted backup import with a different passphrase must not silently chan
   await loadApp(page);
   await addEntry(page, { label: "VaultA:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(passphraseA);
@@ -612,6 +643,7 @@ test("encrypted backup import with a different passphrase must not silently chan
   await page.getByRole("button", { name: "Unlock Vault" }).click();
   await expect(page.locator("#unlock-status")).toHaveText("Vault unlocked");
 
+  await openSettingsSheet(page);
   await page.locator("#import-backup").setInputFiles({
     name: "encrypted-backup-b.json",
     mimeType: "application/json",
@@ -647,6 +679,7 @@ test("encrypted storage forces unlock on load", async ({ page }) => {
   await loadApp(page);
   await addEntry(page, { label: "Locked:user@example.com", secret: PRIMARY_SECRET });
 
+  await openSettingsSheet(page);
   await page.locator("#persist-toggle").check();
   await page.locator("#encrypt-toggle").check();
   await page.locator("#vault-passphrase").fill(PASSPHRASE);
@@ -667,6 +700,7 @@ test("renders import preview labels as text instead of HTML", async ({ page }) =
   await loadApp(page);
 
   const maliciousLabel = encodeURIComponent('Issuer:<img src=x onerror="window.__otpVaultPreviewXss = true">');
+  await openAddSheet(page, "paste");
   await page.locator("#uri").fill(`otpauth://totp/${maliciousLabel}?secret=${PRIMARY_SECRET}&period=30&digits=6`);
   await page.getByRole("button", { name: "Import otpauth:// URI" }).click();
 

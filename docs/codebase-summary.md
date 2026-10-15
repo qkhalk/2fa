@@ -1,14 +1,14 @@
 # Codebase Summary
 
-Last updated: 2026-10-08
+Last updated: 2026-10-15
 
 ## Directory Layout
 
 ```
 2fa/
 ├── index.html              # Root PWA app entry point
-├── app.js                  # Main browser app (~2500 lines)
-├── styles.css              # App styles
+├── app.js                  # Main browser app
+├── styles.css              # App styles (token-based design system)
 ├── sw.js                   # Service worker for offline/PWA support
 ├── manifest.webmanifest   # PWA manifest
 ├── lib/
@@ -21,7 +21,7 @@ Last updated: 2026-10-08
 ├── extension/
 │   ├── popup.js           # Extension popup entry point
 │   ├── popup.html         # Extension popup UI
-│   ├── popup.css          # Extension styles
+│   ├── popup.css          # Extension styles (same token vocabulary as styles.css)
 │   ├── manifest.json      # Chrome MV3 extension manifest
 │   ├── background.js      # Extension service worker
 │   └── icons/             # Extension-specific icons

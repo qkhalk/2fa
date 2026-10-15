@@ -105,12 +105,13 @@ async function loadApp(page) {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await expect(page.locator("#secret")).toBeVisible();
 }
 
 test("imports a Google Authenticator migration export through the preview", async ({ page }) => {
   await loadApp(page);
 
+  await page.locator("#open-add-dialog").click();
+  await page.locator('label[for="tab-paste"]').click();
   await page.locator("#uri").fill(twoEntryFixtureUri());
   await page.getByRole("button", { name: "Import Google Authenticator" }).click();
 

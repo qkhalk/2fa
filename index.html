@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0f1117">
+  <meta name="theme-color" content="#1b1d21">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f4ef">
   <title>Personal OTP Vault</title>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https:; base-uri 'none'; form-action 'none'">
   <link rel="icon" href="./favicon.ico" sizes="any">
@@ -15,9 +16,6 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="halo halo-a" aria-hidden="true"></div>
-  <div class="halo halo-b" aria-hidden="true"></div>
-
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
 
   <div id="vault-stale-banner" class="vault-stale-banner hidden" role="status">
@@ -36,177 +34,308 @@
     <button type="button" id="drift-dismiss" class="btn small ghost">Dismiss</button>
   </div>
 
-  <main class="app-shell">
-    <header class="hero-band">
-      <div class="hero-copy">
-        <p class="eyebrow">private control room</p>
-        <h1>Personal OTP Vault</h1>
-        <p class="hero-text">
-          Local-first TOTP manager with import review, encrypted vault backups, grouped workspaces, and an installable offline app.
-        </p>
-        <div class="hero-actions">
-          <button type="button" id="install-app" class="btn primary">Install App</button>
-          <button type="button" id="lock-app" class="btn ghost">Lock Vault</button>
-        </div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-glyph" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="7" width="10" height="7" rx="1.5"></rect>
+            <path d="M5 7V5a3 3 0 0 1 6 0v2"></path>
+          </svg>
+        </span>
+        <span>OTP Vault</span>
       </div>
 
-      <div class="hero-signal" aria-hidden="true">
-        <div class="signal-grid">
-          <div class="signal-line"></div>
-          <div class="signal-line signal-line-alt"></div>
-          <div class="signal-ring signal-ring-a"></div>
-          <div class="signal-ring signal-ring-b"></div>
-          <div class="signal-core">
-            <span class="signal-word">SYNC</span>
-            <span class="signal-word">LOCK</span>
-            <span class="signal-word">OTP</span>
-          </div>
-        </div>
+      <div class="topbar-search">
+        <label class="search-wrap">
+          <input id="search" type="search" aria-label="Search entries" placeholder="Search issuer, account, or tag">
+        </label>
+      </div>
+
+      <div class="topbar-timer" aria-label="OTP refresh timer">
+        <span id="timer-value">30s</span>
+        <div class="timer-track"><div id="timer-bar"></div></div>
+      </div>
+
+      <div class="topbar-actions">
+        <button type="button" id="open-history-dialog" class="icon-btn" aria-label="Copy history" title="Copy history">
+          <span aria-hidden="true">◷</span>
+          <span class="count" id="history-count" aria-hidden="true">0</span>
+        </button>
+        <button type="button" id="install-app" class="btn small ghost">Install App</button>
+        <button type="button" id="lock-app" class="btn small ghost">Lock Vault</button>
+        <button type="button" id="open-settings-dialog" class="icon-btn" aria-label="Vault settings" title="Vault settings">
+          <span aria-hidden="true">⚙</span>
+        </button>
+        <button type="button" id="open-add-dialog" class="btn small primary">+ Add</button>
       </div>
     </header>
 
-    <section id="unlock-panel" class="vault-lock hidden" aria-labelledby="unlock-heading">
-      <div>
-        <p class="eyebrow">vault state</p>
-        <h2 id="unlock-heading">Vault locked on this device</h2>
-        <p class="helper-text">Unlock with your passphrase to read encrypted entries stored locally.</p>
-      </div>
-      <form id="unlock-form" class="unlock-actions">
-        <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
-        <button type="submit" id="unlock-btn" class="btn primary">Unlock Vault</button>
-        <button type="button" id="biometric-unlock-btn" class="btn ghost hidden">Unlock with biometrics</button>
-        <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
-          <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
-          <span class="strength-label"></span>
-          <p class="strength-warnings helper-text"></p>
+    <section id="unlock-panel" class="unlock hidden" aria-labelledby="unlock-heading">
+      <div class="unlock-card">
+        <div>
+          <p class="eyebrow">vault state</p>
+          <h2 id="unlock-heading">Vault locked on this device</h2>
+          <p class="helper-text">Unlock with your passphrase to read encrypted entries stored locally.</p>
         </div>
-      </form>
-      <p id="unlock-status" class="helper-text status-line" aria-live="polite"></p>
+        <form id="unlock-form" class="unlock-actions">
+          <input id="unlock-passphrase" type="password" placeholder="Enter vault passphrase">
+          <button type="submit" id="unlock-btn" class="btn primary">Unlock Vault</button>
+          <button type="button" id="biometric-unlock-btn" class="btn ghost hidden">Unlock with biometrics</button>
+          <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
+            <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
+            <span class="strength-label"></span>
+            <p class="strength-warnings helper-text"></p>
+          </div>
+        </form>
+        <p id="unlock-status" class="helper-text status-line" aria-live="polite"></p>
+      </div>
     </section>
 
-    <section class="workspace">
-      <aside class="control-rail">
-        <section class="rail-panel control-stack">
-          <div class="section-heading rail-head">
-            <p class="eyebrow">vault controls</p>
-            <h2>Add, import, and protect</h2>
-            <p class="helper-text">One rail for setup. The main workspace stays focused on daily use and active codes.</p>
+    <main class="content">
+      <div class="listbar">
+        <div class="listbar-title">
+          <h2 id="workspace-heading">Current Codes</h2>
+        </div>
+
+        <div class="workspace-summary" id="workspace-summary">
+          <article class="summary-card">
+            <span class="summary-label">Accounts</span>
+            <strong id="summary-total">0</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Pinned</span>
+            <strong id="summary-pinned">0</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Groups</span>
+            <strong id="summary-groups">0</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Storage</span>
+            <strong id="summary-storage">Session</strong>
+          </article>
+        </div>
+
+        <div class="workspace-chip" id="offline-chip">Online</div>
+
+        <div class="listbar-controls">
+          <label>
+            <span>Sort</span>
+            <select id="sort-select">
+              <option value="pinned-alpha">Pinned + A-Z</option>
+              <option value="custom">Manual order</option>
+              <option value="recent">Newest first</option>
+              <option value="period">Fastest timer first</option>
+            </select>
+          </label>
+          <label>
+            <span>Group</span>
+            <select id="group-select">
+              <option value="none">No group</option>
+              <option value="issuer">Issuer</option>
+              <option value="tag">First tag</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <section id="bulk-bar" class="bulk-bar hidden" aria-live="polite">
+        <p id="bulk-summary">0 selected</p>
+        <div class="bulk-actions">
+          <input id="bulk-tag-input" type="text" placeholder="Add tag to selected">
+          <button id="bulk-tag-apply" type="button" class="btn ghost small">Apply Tag</button>
+          <button id="bulk-remove" type="button" class="btn danger small">Remove Selected</button>
+        </div>
+      </section>
+
+      <div id="entries" class="entries" aria-live="polite"></div>
+    </main>
+  </div>
+
+  <template id="entry-template">
+    <article class="entry">
+      <label class="entry-select-wrap">
+        <input type="checkbox" class="entry-select" aria-label="Select entry">
+      </label>
+      <div class="entry-avatar" aria-hidden="true"></div>
+      <div class="entry-main">
+        <div class="entry-id">
+          <h3 class="entry-label"></h3>
+          <p class="entry-account"></p>
+          <div class="entry-tag-row"></div>
+        </div>
+        <p class="entry-code">------</p>
+      </div>
+      <div class="entry-side">
+        <div class="entry-countdown">
+          <span class="entry-seconds"></span>
+          <span class="entry-algo hidden"></span>
+          <span class="entry-counter hidden"></span>
+          <span class="entry-meta"></span>
+          <div class="entry-track"><div class="entry-bar"></div></div>
+          <svg class="entry-ring" viewBox="0 0 36 36" aria-hidden="true">
+            <circle class="ring-track" cx="18" cy="18" r="16"></circle>
+            <circle class="ring-progress" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"></circle>
+          </svg>
+        </div>
+        <div class="entry-actions">
+          <button type="button" class="drag-handle" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
+          <button type="button" class="btn small copy">Copy</button>
+          <button type="button" class="btn small reveal">Reveal</button>
+          <button type="button" class="btn small pin">Pin</button>
+          <button type="button" class="btn small edit">Edit</button>
+          <button type="button" class="btn small move-up">Up</button>
+          <button type="button" class="btn small move-down">Down</button>
+          <button type="button" class="btn small remove destructive">Remove</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <dialog id="add-dialog" class="sheet" aria-labelledby="add-dialog-heading">
+    <div class="sheet-card">
+      <div class="sheet-head">
+        <p class="eyebrow">vault controls</p>
+        <h2 id="add-dialog-heading">Add &amp; import entries</h2>
+        <button type="button" class="icon-btn" data-sheet-close aria-label="Close panel">✕</button>
+      </div>
+
+      <div class="sheet-body">
+        <form id="otp-form" autocomplete="off">
+          <div class="add-tabs" role="radiogroup" aria-label="Add entry methods">
+            <input type="radio" class="tab-input" name="add-tabs" id="tab-manual" checked>
+            <label class="tab" for="tab-manual">Manual</label>
+            <input type="radio" class="tab-input" name="add-tabs" id="tab-paste">
+            <label class="tab" for="tab-paste">Paste</label>
+            <input type="radio" class="tab-input" name="add-tabs" id="tab-qr">
+            <label class="tab" for="tab-qr">QR</label>
+            <input type="radio" class="tab-input" name="add-tabs" id="tab-camera">
+            <label class="tab" for="tab-camera">Camera</label>
+
+            <div class="tab-panels">
+              <section class="tab-panel" aria-label="Manual entry">
+                <div class="grid">
+                  <label>
+                    <span>Base32 Secret</span>
+                    <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required autofocus>
+                  </label>
+
+                  <label>
+                    <span>Label (optional)</span>
+                    <input id="label" name="label" type="text" placeholder="GitHub:user@example.com">
+                  </label>
+
+                  <label>
+                    <span>Tags</span>
+                    <input id="tags" name="tags" type="text" placeholder="work, infra, personal">
+                  </label>
+
+                  <label>
+                    <span>Type</span>
+                    <select id="entry-type" name="entry-type">
+                      <option value="totp" selected>TOTP (timed)</option>
+                      <option value="hotp">HOTP (counter)</option>
+                    </select>
+                  </label>
+
+                  <label id="counter-field" class="hidden">
+                    <span>Counter</span>
+                    <input id="counter" name="counter" type="number" min="0" value="0" required>
+                  </label>
+
+                  <label>
+                    <span>Algorithm</span>
+                    <select id="algorithm" name="algorithm">
+                      <option value="SHA1" selected>SHA-1</option>
+                      <option value="SHA256">SHA-256</option>
+                      <option value="SHA512">SHA-512</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>Digits</span>
+                    <select id="digits" name="digits">
+                      <option value="6" selected>6</option>
+                      <option value="8">8</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>Period (seconds)</span>
+                    <input id="period" name="period" type="number" min="15" max="120" value="30" required>
+                  </label>
+                </div>
+
+                <div class="actions">
+                  <button type="submit" class="btn primary">Save Entry</button>
+                </div>
+              </section>
+
+              <section class="tab-panel" aria-label="Paste URIs">
+                <label class="stack-field">
+                  <span>Paste one or many `otpauth://` URIs</span>
+                  <textarea id="uri" rows="3" placeholder="Paste one or many OTP URIs here. The vault will preview valid matches before import."></textarea>
+                </label>
+                <div class="actions actions-stack">
+                  <button type="button" id="parse-uri" class="btn">Import otpauth:// URI</button>
+                  <button type="button" id="import-ga" class="btn ghost">Import Google Authenticator</button>
+                  <button type="button" id="import-clipboard" class="btn ghost">Import from clipboard</button>
+                </div>
+              </section>
+
+              <section class="tab-panel" aria-label="QR image import">
+                <div class="grid import-grid">
+                  <label>
+                    <span>QR image file</span>
+                    <span class="file-btn">
+                      <input id="qr-file" type="file" accept="image/*">
+                      <span id="qr-file-name">Choose image file…</span>
+                    </span>
+                  </label>
+
+                  <label>
+                    <span>QR image URL</span>
+                    <div class="inline-action">
+                      <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
+                      <button type="button" id="import-qr-url" class="btn ghost">Import</button>
+                    </div>
+                  </label>
+                </div>
+              </section>
+
+              <section class="tab-panel" aria-label="Camera import">
+                <div class="scan-box">
+                  <div class="scan-head">
+                    <p class="helper-text">A scan is only accepted after it repeats over two frames, reducing accidental false positives.</p>
+                    <div class="scan-actions">
+                      <button type="button" id="start-camera" class="btn small">Start Camera</button>
+                      <button type="button" id="stop-camera" class="btn ghost small" disabled>Stop</button>
+                    </div>
+                  </div>
+                  <video id="camera-preview" playsinline muted></video>
+                </div>
+              </section>
+            </div>
           </div>
 
-          <section class="rail-section compose-panel">
-            <div class="section-heading">
-              <p class="eyebrow">manual entry</p>
-              <h3>Add OTP Entry</h3>
-              <p class="helper-text">Use tags to group accounts by project, team, or device.</p>
-            </div>
+          <p id="import-status" class="helper-text status-line" aria-live="polite"></p>
+        </form>
+      </div>
+    </div>
+  </dialog>
 
-            <form id="otp-form" autocomplete="off">
-              <div class="grid">
-                <label>
-                  <span>Base32 Secret</span>
-                  <input id="secret" name="secret" type="text" placeholder="JBSWY3DPEHPK3PXP" required>
-                </label>
+  <dialog id="settings-dialog" class="sheet" aria-labelledby="settings-dialog-heading">
+    <div class="sheet-card">
+      <div class="sheet-head">
+        <p class="eyebrow">privacy</p>
+        <h2 id="settings-dialog-heading" tabindex="-1" autofocus>Device &amp; backup controls</h2>
+        <button type="button" class="icon-btn" data-sheet-close aria-label="Close panel">✕</button>
+      </div>
 
-                <label>
-                  <span>Label (optional)</span>
-                  <input id="label" name="label" type="text" placeholder="GitHub:user@example.com">
-                </label>
-
-                <label>
-                  <span>Tags</span>
-                  <input id="tags" name="tags" type="text" placeholder="work, infra, personal">
-                </label>
-
-                <label>
-                  <span>Type</span>
-                  <select id="entry-type" name="entry-type">
-                    <option value="totp" selected>TOTP (timed)</option>
-                    <option value="hotp">HOTP (counter)</option>
-                  </select>
-                </label>
-
-                <label id="counter-field" class="hidden">
-                  <span>Counter</span>
-                  <input id="counter" name="counter" type="number" min="0" value="0" required>
-                </label>
-
-                <label>
-                  <span>Algorithm</span>
-                  <select id="algorithm" name="algorithm">
-                    <option value="SHA1" selected>SHA-1</option>
-                    <option value="SHA256">SHA-256</option>
-                    <option value="SHA512">SHA-512</option>
-                  </select>
-                </label>
-
-                <label>
-                  <span>Digits</span>
-                  <select id="digits" name="digits">
-                    <option value="6" selected>6</option>
-                    <option value="8">8</option>
-                  </select>
-                </label>
-
-                <label>
-                  <span>Period (seconds)</span>
-                  <input id="period" name="period" type="number" min="15" max="120" value="30" required>
-                </label>
-              </div>
-
-              <div class="actions actions-tight">
-                <button type="submit" class="btn primary">Save Entry</button>
-                <button type="button" id="parse-uri" class="btn ghost">Import otpauth:// URI</button>
-                <button type="button" id="import-ga" class="btn ghost">Import Google Authenticator</button>
-                <button type="button" id="import-clipboard" class="btn ghost">Clipboard</button>
-                <button type="button" id="clear-all" class="btn danger">Clear All</button>
-              </div>
-
-              <label class="stack-field">
-                <span>Paste one or many `otpauth://` URIs</span>
-                <textarea id="uri" rows="3" placeholder="Paste one or many OTP URIs here. The vault will preview valid matches before import."></textarea>
-              </label>
-
-              <div class="grid import-grid">
-                <label>
-                  <span>QR image file</span>
-                  <input id="qr-file" type="file" accept="image/*">
-                </label>
-
-                <label>
-                  <span>QR image URL</span>
-                  <div class="inline-action">
-                    <input id="qr-url" type="url" placeholder="https://example.com/qr.png">
-                    <button type="button" id="import-qr-url" class="btn ghost small">Import</button>
-                  </div>
-                </label>
-              </div>
-
-              <div class="scan-box">
-                <div class="scan-head">
-                  <div>
-                    <p class="eyebrow">camera import</p>
-                    <h3>Confirm scans over two frames</h3>
-                  </div>
-                  <div class="scan-actions">
-                    <button type="button" id="start-camera" class="btn ghost small">Start Camera</button>
-                    <button type="button" id="stop-camera" class="btn ghost small">Stop</button>
-                  </div>
-                </div>
-                <video id="camera-preview" playsinline muted></video>
-                <p class="helper-text">A scan is only accepted after it repeats, reducing accidental false positives.</p>
-              </div>
-
-              <p id="import-status" class="helper-text status-line" aria-live="polite"></p>
-            </form>
-          </section>
-
-          <section class="rail-section settings-panel">
-            <div class="section-heading">
-              <p class="eyebrow">privacy</p>
-              <h3>Device & Backup Controls</h3>
-            </div>
-
-            <form id="settings-form">
+      <div class="sheet-body">
+        <form id="settings-form">
+          <div class="sheet-section">
             <div class="toggle-grid">
               <label class="toggle-row">
                 <input id="persist-toggle" type="checkbox">
@@ -280,9 +409,10 @@
                 <button type="button" id="disenroll-biometric-btn" class="btn ghost hidden">Disable biometric unlock</button>
               </div>
             </div>
+          </div>
 
+          <div class="sheet-section">
             <p id="last-export-line" class="helper-text"></p>
-
             <div class="actions actions-tight">
               <button type="button" id="export-backup" class="btn ghost">Export Backup</button>
               <label class="btn ghost backup-import-label">
@@ -293,142 +423,41 @@
               <button type="button" id="check-drift-btn" class="btn ghost">Check clock now</button>
               <button type="submit" id="save-settings" class="btn primary">Save Privacy Settings</button>
             </div>
-
             <p id="settings-status" class="helper-text status-line" aria-live="polite"></p>
-            </form>
-          </section>
-        </section>
-      </aside>
+          </div>
 
-      <section class="workspace-main">
-        <div class="workspace-toolbar">
-          <div class="toolbar-head">
-            <div>
-              <p class="eyebrow">workspace</p>
-              <h2 id="workspace-heading">Current Codes</h2>
-            </div>
-            <div class="workspace-status">
-              <div class="workspace-chip" id="offline-chip">Online</div>
-              <div class="timer-wrap" aria-label="OTP refresh timer">
-                <span id="timer-value">30s</span>
-                <div class="timer-track"><div id="timer-bar"></div></div>
+          <div class="sheet-section">
+            <div class="danger-zone">
+              <p class="eyebrow">danger zone</p>
+              <p class="helper-text">Removes every entry stored on this device. Export a backup first.</p>
+              <div class="actions actions-tight">
+                <button type="button" id="clear-all" class="btn danger">Clear All</button>
               </div>
             </div>
           </div>
-
-          <section class="workspace-summary" id="workspace-summary">
-            <article class="summary-card">
-              <span class="summary-label">Accounts</span>
-              <strong id="summary-total">0</strong>
-            </article>
-            <article class="summary-card">
-              <span class="summary-label">Pinned</span>
-              <strong id="summary-pinned">0</strong>
-            </article>
-            <article class="summary-card">
-              <span class="summary-label">Groups</span>
-              <strong id="summary-groups">0</strong>
-            </article>
-            <article class="summary-card">
-              <span class="summary-label">Storage</span>
-              <strong id="summary-storage">Session</strong>
-            </article>
-          </section>
-
-          <div class="toolbar-controls">
-            <label class="search-wrap" aria-label="Search entries">
-              <input id="search" type="search" placeholder="Search issuer, account, or tag">
-            </label>
-            <label>
-              <span>Sort</span>
-              <select id="sort-select">
-                <option value="pinned-alpha">Pinned + A-Z</option>
-                <option value="custom">Manual order</option>
-                <option value="recent">Newest first</option>
-                <option value="period">Fastest timer first</option>
-              </select>
-            </label>
-            <label>
-              <span>Group</span>
-              <select id="group-select">
-                <option value="none">No group</option>
-                <option value="issuer">Issuer</option>
-                <option value="tag">First tag</option>
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <section id="bulk-bar" class="bulk-bar hidden" aria-live="polite">
-          <p id="bulk-summary">0 selected</p>
-          <div class="bulk-actions">
-            <input id="bulk-tag-input" type="text" placeholder="Add tag to selected">
-            <button id="bulk-tag-apply" type="button" class="btn ghost small">Apply Tag</button>
-            <button id="bulk-remove" type="button" class="btn danger small">Remove Selected</button>
-          </div>
-        </section>
-
-        <div id="entries" class="entries" aria-live="polite"></div>
-      </section>
-
-      <aside class="inspector-rail">
-        <section class="rail-panel history-panel">
-          <div class="section-heading">
-            <p class="eyebrow">recent activity</p>
-            <h2>Copy History</h2>
-          </div>
-          <ul id="copy-history" class="history-list"></ul>
-        </section>
-
-      </aside>
-    </section>
-  </main>
-
-  <template id="entry-template">
-    <article class="entry">
-      <label class="entry-select-wrap">
-        <input type="checkbox" class="entry-select" aria-label="Select entry">
-      </label>
-      <div class="entry-avatar" aria-hidden="true"></div>
-      <div class="entry-main">
-        <div class="entry-heading">
-          <div>
-            <h3 class="entry-label"></h3>
-            <p class="entry-account"></p>
-          </div>
-          <p class="entry-meta"></p>
-        </div>
-        <div class="entry-tag-row"></div>
-        <p class="entry-code">------</p>
-        <div class="entry-countdown">
-          <span class="entry-seconds"></span>
-          <span class="entry-algo hidden"></span>
-          <span class="entry-counter hidden"></span>
-          <div class="entry-track"><div class="entry-bar"></div></div>
-          <svg class="entry-ring" viewBox="0 0 36 36" aria-hidden="true">
-            <circle class="ring-track" cx="18" cy="18" r="16"></circle>
-            <circle class="ring-progress" cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="100" stroke-dashoffset="0"></circle>
-          </svg>
-        </div>
+        </form>
       </div>
-      <div class="entry-actions">
-        <button type="button" class="drag-handle" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
-        <button type="button" class="btn small edit">Edit</button>
-        <button type="button" class="btn small move-up">Up</button>
-        <button type="button" class="btn small move-down">Down</button>
-        <button type="button" class="btn small copy">Copy</button>
-        <button type="button" class="btn small reveal">Reveal</button>
-        <button type="button" class="btn small pin">Pin</button>
-        <button type="button" class="btn small remove destructive">Remove</button>
+    </div>
+  </dialog>
+
+  <dialog id="history-dialog" class="sheet" aria-labelledby="history-dialog-heading">
+    <div class="sheet-card">
+      <div class="sheet-head">
+        <p class="eyebrow">recent activity</p>
+        <h2 id="history-dialog-heading" tabindex="-1" autofocus>Copy History</h2>
+        <button type="button" class="icon-btn" data-sheet-close aria-label="Close panel">✕</button>
       </div>
-    </article>
-  </template>
+      <div class="sheet-body">
+        <ul id="copy-history" class="history-list"></ul>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="privacy-dialog" class="dialog-shell">
     <form id="privacy-form" method="dialog" class="dialog-card">
       <p class="eyebrow">storage warning</p>
       <h3>Before enabling device storage</h3>
-      <p>Your 2FA secrets will be saved in browser storage on this device. Use encrypted storage and only enable this on trusted hardware.</p>
+      <p class="helper-text">Your 2FA secrets will be saved in browser storage on this device. Use encrypted storage and only enable this on trusted hardware.</p>
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">Cancel</button>
         <button value="accept" class="btn primary" type="submit">I Understand</button>
@@ -541,7 +570,7 @@
       </label>
       <label>
         <span>Confirm new passphrase</span>
-        <input id="new-passphrase-confirm" type="password" placeholder="Repeat new passphrase">
+        <input id="new-passphrase-confirm" type="password" placeholder="Repeat passphrase">
       </label>
       <p id="change-passphrase-status" class="helper-text status-line"></p>
       <div class="dialog-actions">
