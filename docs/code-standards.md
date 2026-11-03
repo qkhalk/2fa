@@ -1,6 +1,6 @@
 # Code Standards
 
-Last updated: 2026-06-27
+Last updated: 2026-10-15
 
 ## Core Conventions
 
@@ -13,6 +13,12 @@ Last updated: 2026-06-27
 - **esbuild**: Primary build tool for bundling `app.js` → `app.bundle.js` and `extension/popup.js` → `extension/popup.bundle.js`
 - **Target Browsers**: Chrome 114+, Safari 16+, Firefox 115+
 - **Format**: ESM with no sourcemaps (configured in `scripts/build.mjs`)
+
+### Styling and Design Tokens
+- **Token-first CSS**: every color, size, spacing, radius, and duration comes from the token scales defined at the top of `styles.css`; extend the scales rather than hardcoding values
+- **Shared vocabulary**: `extension/popup.css` uses the same token names (oklch color ramps, `--s1..--s8` spacing, type scale, control heights, radii, motion); update both stylesheets together so the web app and extension stay visually in sync
+- **Themes**: dark is the default; keep the Light/System themes aligned with it — small UI labels must meet 4.5:1 contrast in both themes
+- **Motion**: honor `prefers-reduced-motion` for animations
 
 ## Naming Conventions
 

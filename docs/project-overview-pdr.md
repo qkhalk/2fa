@@ -1,6 +1,6 @@
 # Product Overview and Development Requirements
 
-Last updated: 2026-06-27
+Last updated: 2026-10-15
 
 ## Product Purpose
 
@@ -63,11 +63,12 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 
 ### Functional Requirements
 
-#### FR1: TOTP Generation
-- **Implementation**: RFC 6238 compliant TOTP generation using HMAC-SHA1
+#### FR1: TOTP/HOTP Generation
+- **Implementation**: RFC 6238 compliant TOTP plus RFC 4226 counter-based HOTP (per-entry `type`)
 - **Code Parameters**: Support for 6-digit (default) and 8-digit codes
 - **Time Period**: Configurable periods between 15-120 seconds (default 30s)
-- **Algorithm Support**: SHA1 only (as specified in otpauth standard)
+- **Algorithm Support**: SHA-1 (default), SHA-256, SHA-512 (`HMAC_HASH_NAMES` in `lib/otp.js`)
+- **HOTP Counter Semantics**: Counter increments on reveal/copy
 - **Counter Encoding**: 8-byte big-endian counter representation
 - **Dynamic Truncation**: RFC 6238 compliant truncation for code generation
 
@@ -214,7 +215,7 @@ Personal OTP Vault is a local-first, privacy-focused Time-based One-Time Passwor
 
 ## Development Priorities
 
-### Current Focus (v0.2.x)
+### Current Focus (v0.3.x)
 - **Stability**: Ensure reliable TOTP generation and vault operations
 - **Cross-Platform Parity**: Feature equality between web app and extension
 - **Testing**: Comprehensive test coverage for domain logic and UI flows
