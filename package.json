@@ -1,7 +1,7 @@
 {
   "name": "personal-otp-vault",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "release:prepare": "node ./scripts/prepare-release.mjs",
@@ -19,11 +19,11 @@
     "@playwright/test": "^1.54.2",
     "esbuild": "^0.25.10",
     "http-server": "^14.1.1",
-    "qrcode": "^1.5.4",
     "sharp": "^0.34.4",
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "jsqr": "^1.4.0"
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4"
   }
 }

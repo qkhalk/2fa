@@ -1708,3 +1708,15 @@ body.dragging-entry {
     --ctl: 44px;
   }
 }
+
+/* Single-entry QR export dialog */
+.qr-export-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.qr-export-wrap canvas {
+  border-radius: 10px;
+  display: block;
+}

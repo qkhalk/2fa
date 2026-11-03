@@ -75,10 +75,43 @@ describe("i18n", () => {
     expect(() => registerStrings("de", ["a.b"])).toThrow("Strings must be a plain object");
   });
 
-  it("keeps reserved toast and import keys resolvable without migrating them", () => {
+  it("resolves the migrated toast and import keys after the full-coverage migration", () => {
     expect(t("toast.vaultTitle")).toBe("Vault");
     expect(t("toast.copyFailed")).toBe("Could not copy OTP to clipboard");
-    expect(t("import.entryAdded")).toBe("Entry added");
+    expect(t("add.entryAdded")).toBe("Entry added");
     expect(t("import.invalidUri")).toBe("Invalid URI");
+  });
+});
+
+describe("i18n catalogs", () => {
+  it("ships a complete Vietnamese catalog covering every English key", async () => {
+    const mod = await import("../../lib/i18n.js");
+    setLocale("vi");
+    // Every en key must resolve in vi to something other than the key name.
+    for (const key of Object.keys(mod.reserved)) {
+      expect(t(key), `vi missing key: ${key}`).not.toBe(key);
+    }
+    setLocale("en");
+  });
+
+  it("lists supported locales and resolves a UI locale setting", async () => {
+    const mod = await import("../../lib/i18n.js");
+    expect(mod.getSupportedLocales()).toContain("vi");
+    expect(mod.resolveLocale("vi")).toBe("vi");
+    expect(mod.resolveLocale("system")).toBe("en"); // Node has no navigator
+    expect(mod.resolveLocale("unknown-xx")).toBe("en");
+  });
+
+  it("translates passphrase strength assessments", async () => {
+    const mod = await import("../../lib/i18n.js");
+    setLocale("vi");
+    const translated = mod.translateStrengthAssessment({
+      score: 1,
+      label: "Weak",
+      warnings: ["Use at least 12 characters for a stronger passphrase"],
+    });
+    expect(translated.label).toBe("Yếu");
+    expect(translated.warnings[0]).toContain("12 ký tự");
+    setLocale("en");
   });
 });

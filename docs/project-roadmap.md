@@ -1,17 +1,15 @@
 # Project Roadmap
 
-Last updated: 2026-10-15
+Last updated: 2026-10-28
 
-## Current Status: Version 0.3.0
+## Current Status: 0.4.0 Released
 
-The Personal OTP Vault is at v0.3.0. The 0.2.0 hardening wave shipped KDF
-parameterization (600k PBKDF2 envelope), auto-lock and unlock throttling,
-HOTP + SHA-256/512 support, Google Authenticator migration import, undo-delete
-with tombstone, backup reminder, time-drift check, WebAuthn PRF biometric
-unlock (two-envelope DEK design), dark mode, drag & drop reorder, per-entry
-countdown rings, an accessibility pass, and an i18n framework — in both the
-PWA and the Chrome extension. 0.3.0 rebuilt both frontends on a shared
-token-based design system with a codes-first app shell.
+The Personal OTP Vault shipped the 0.3.0 product UI redesign (token system,
+codes-first shell, slide-over sheets) and released it together with the
+migration-and-language wave as 0.4.0: Aegis + 2FAS import, single-entry QR
+export, complete i18n with a full Vietnamese translation plus a Language
+setting, an extension keyboard shortcut, and backup format v3 with a keyed
+HMAC checksum (authenticity, closing the integrity-only caveat).
 
 ## Completed Features (Done)
 
@@ -33,8 +31,20 @@ token-based design system with a codes-first app shell.
 - ✅ **Privacy Features**: Code blurring, screenshot-safe mode, clipboard clear
 - ✅ **Visual Feedback**: Per-entry countdown rings, urgent indicators, dark mode (System/Light/Dark)
 - ✅ **Accessibility**: Axe-scanned views (zero criticals), keyboard-reachable controls, announced toasts
-- ✅ **i18n Framework**: `lib/i18n.js` English catalog; unlock + settings areas read strings via `t()`
-- ✅ **Product UI Redesign (0.3.0)**: both frontends on one token system (oklch color ramps, 4pt spacing, type scale, control heights, radius + motion tokens); compact codes-first shell with slide-over sheets for add/import, settings, and copy history
+- ✅ **i18n Framework**: `lib/i18n.js` with complete English + Vietnamese
+  catalogs; all user-visible strings in both frontends resolve through `t()`
+  (static HTML via `data-i18n*` attributes), with a Language setting
+  (System/English/Tiếng Việt)
+- ✅ **Third-Party App Import**: Aegis plain-text JSON and 2FAS backups decode
+  into the shared import preview (`lib/importers.js`); encrypted Aegis
+  exports are rejected with guidance
+- ✅ **Single-Entry QR Export**: per-entry QR of the `otpauth://` URI
+  (`buildOtpAuthUri`, vendored `qrcode` encoder) with Copy URI and Download
+  PNG, in both frontends
+- ✅ **Extension Keyboard Shortcut**: `Ctrl+Shift+U` / `Cmd+Shift+U` opens
+  the popup (MV3 `commands`)
+- ✅ **Backup Format v3**: encrypted backups carry a keyed HMAC-SHA256
+  checksum for authenticity (verified before decryption); v1/v2 still import
 
 ### Testing and Quality Assurance
 - ✅ **Unit Tests**: Vitest coverage for `lib/` modules
@@ -52,13 +62,13 @@ token-based design system with a codes-first app shell.
 
 ## In Progress (None Confirmed)
 
-No confirmed in-progress items at this time. The project is in maintenance mode while gathering user feedback and usage patterns.
+No confirmed in-progress items at this time.
 
 ## Future Themes (Proposals)
 
-Deferred ideas recorded during the 0.2.0 cycle (not scheduled): 2FAS/Aegis
-export import, single-entry QR export, an extension keyboard shortcut, and a
-keyed (HMAC) backup checksum v3 for authenticity rather than integrity-only.
+Deferred ideas recorded during earlier cycles (not scheduled): Steam Guard
+format support, an extension Firefox/Safari port, incremental backups, and
+manual biometric hardware matrix testing.
 
 ### Enhanced QR Code Support (Future Proposal)
 **Rationale**: Current QR parsing focuses on standard `otpauth://` URIs. Some services use custom QR formats or Steam Guard's special encoding.
@@ -136,9 +146,10 @@ authenticators).
 Shipped: tokenized design tokens with a dark theme default and a
 System/Light/Dark toggle, vendored Space Grotesk + IBM Plex Mono fonts,
 per-entry countdown rings, drag & drop reorder, and an axe-core accessibility
-pass with zero critical violations. The 0.3.0 redesign rebuilt the visual
-layer on the shared token system. Remaining follow-up ideas: additional
+pass with zero critical violations. Remaining follow-up ideas: additional
 themes and motion refinements (both respect `prefers-reduced-motion`).
+- Dark mode optimization
+- Customizable themes
 
 **Implementation Considerations**:
 - Impact on visual regression tests

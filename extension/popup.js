@@ -1,4 +1,6 @@
+import QRCode from "qrcode";
 import {
+  buildOtpAuthUri,
   compareEntries,
   computeDropIndex,
   extractMigrationUris,
@@ -16,7 +18,8 @@ import {
   reportError,
   toUserMessage,
 } from "../lib/otp.js";
-import { t } from "../lib/i18n.js";
+import { applyTranslations, resolveLocale, setLocale, t, translateStrengthAssessment } from "../lib/i18n.js";
+import { MAX_IMPORT_FILE_BYTES, parseThirdPartyImport } from "../lib/importers.js";
 import {
   migrationToEntryCandidates,
   parseMigrationUri,
@@ -122,11 +125,19 @@ const migrationPreviewDialog = document.getElementById("migration-preview-dialog
 const migrationPreviewForm = document.getElementById("migration-preview-form");
 const migrationPreviewStatus = document.getElementById("migration-preview-status");
 const migrationPreviewList = document.getElementById("migration-preview-list");
+const importAppsInput = document.getElementById("import-app-file");
+const languageSelect = document.getElementById("language-select");
+const qrExportDialog = document.getElementById("qr-export-dialog");
+const qrExportCanvas = document.getElementById("qr-export-canvas");
+const qrExportTitle = document.getElementById("qr-export-title");
+const qrExportStatus = document.getElementById("qr-export-status");
+const copyQrUriBtn = document.getElementById("copy-qr-uri");
+let qrExportUri = "";
 
 let entries = [];
 let entryNodes = new Map();
 let collapsed = false;
-let settings = { encrypt: false, sortBy: "alpha", theme: "system" };
+let settings = { encrypt: false, sortBy: "alpha", theme: "system", locale: "system" };
 let currentPassphrase = "";
 let heldDek = null;         // CryptoKey held between unlock and lock (biometric/DEK mode)
 let dekEnvelopeMeta = null; // { salt, kdf, dek } — stable across DEK-mode saves
@@ -148,25 +159,17 @@ function applyTheme() {
   }
 }
 
-// Phase 7 FR7 pattern-setter: unlock + settings areas read strings via t().
-function applyStaticStrings() {
-  const set = (id, key) => {
-    const node = document.getElementById(id);
-    if (node) node.textContent = t(key);
-  };
-  const setPlaceholder = (id, key) => {
-    const node = document.getElementById(id);
-    if (node) node.setAttribute("placeholder", t(key));
-  };
-  set("unlock-btn", "unlock.extensionButton");
-  set("export-backup", "settings.exportBackup");
-  set("change-passphrase-btn", "settings.changePassphrase");
-  set("save-security", "settings.extensionSave");
-  setPlaceholder("unlock-passphrase", "unlock.extensionPassphrasePlaceholder");
-  setPlaceholder("passphrase", "settings.extensionPassphrasePlaceholder");
-  setPlaceholder("passphrase-confirm", "settings.extensionPassphraseConfirmPlaceholder");
-  const guidance = document.getElementById("passphrase-guidance");
-  if (guidance) guidance.textContent = t("settings.extensionPassphraseGuidance");
+// Locale resolution + static markup translation; re-run after a language
+// change. data-i18n attributes in popup.html carry the static strings.
+function applyLocale() {
+  setLocale(resolveLocale(settings.locale));
+  applyTranslations(document);
+  // Re-render surfaces that hold translated strings in memory.
+  applyUiState();
+  renderEntries();
+  renderCopyHistory();
+  renderBackupReminder();
+  renderBiometricControls();
 }
 
 initialize();
@@ -183,6 +186,7 @@ async function initialize() {
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const themeSelect = document.getElementById("theme-select");
   if (themeSelect) themeSelect.value = settings.theme || "system";
+  if (languageSelect) languageSelect.value = settings.locale || "system";
   applyTheme();
   const hasExistingEncryptedVault = Boolean(settings.encrypt && stored[ENCRYPTED_KEY]);
   passphraseFields.classList.toggle("hidden", !settings.encrypt || hasExistingEncryptedVault);
@@ -219,7 +223,7 @@ async function initialize() {
   if (settings.encrypt && stored[ENCRYPTED_KEY]) {
     await reconcileOrphanedBiometricRecord();
   }
-  applyStaticStrings();
+  applyLocale();
   bindEvents();
   bindPassphraseStrengthMeters();
   bindAutoLockActivity();
@@ -334,13 +338,13 @@ async function reconcileOrphanedBiometricRecord() {
 async function requirePassphrase(actionLabel) {
   if (currentPassphrase) return currentPassphrase;
   if (!heldDek) return "";
-  const candidate = window.prompt(`Enter your vault passphrase to ${actionLabel}:`);
-  if (!candidate) throw new Error("Vault passphrase required for this action");
+  const candidate = window.prompt(t("ext.passphrasePromptAction", { action: actionLabel }));
+  if (!candidate) throw new Error(t("vault.passphraseRequired"));
   const normalized = normalizePassphrase(candidate);
   const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
   const payload = stored[ENCRYPTED_KEY];
   if (!payload || !isDekEncryptedPayload(payload)) {
-    throw new Error("Vault passphrase required for this action");
+    throw new Error(t("vault.passphraseRequired"));
   }
   heldDek = await unwrapDekWithPassphrase(payload, normalized);
   dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
@@ -360,7 +364,7 @@ async function refreshSessionCacheForDek(payload) {
 
 function applyUiState() {
   document.body.classList.toggle("collapsed", collapsed);
-  toggleFormBtn.textContent = collapsed ? "Show" : "Hide";
+  toggleFormBtn.textContent = collapsed ? t("ext.show") : t("ext.hide");
 }
 
 async function saveUiState() {
@@ -456,7 +460,7 @@ function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
   const stitched = stitchMigrationBatches(payloadByteArrays);
   const warnings = [...stitched.warnings];
   if (stitched.entries.length === 0) {
-    throw new Error(`No importable entries found in the ${sourceLabel} export${warnings.length ? `: ${warnings.join(" ")}` : ""}`);
+    throw new Error(t("vault.noImportable", { source: sourceLabel, details: warnings.length ? `: ${warnings.join(" ")}` : "" }));
   }
 
   const candidates = [];
@@ -474,7 +478,7 @@ function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
       candidates.push(entry);
     } catch (error) {
       invalid += 1;
-      warnings.push(toUserMessage(error, "An entry could not be mapped"));
+      warnings.push(toUserMessage(error, t("import.mapFailed")));
     }
   }
 
@@ -491,9 +495,9 @@ function renderMigrationPreview() {
   if (!migrationPreviewState || !migrationPreviewList) return;
   const { candidates, skipped, invalid, warnings, sourceLabel } = migrationPreviewState;
 
-  let statusText = `${sourceLabel}: ${candidates.length} entr${candidates.length === 1 ? "y" : "ies"} found.`;
-  if (skipped > 0) statusText += ` ${skipped} duplicate${skipped === 1 ? "" : "s"} pre-unchecked.`;
-  if (invalid > 0) statusText += ` ${invalid} could not be mapped.`;
+  let statusText = t("ext.importAppsStatus", { source: sourceLabel, count: candidates.length, plural: candidates.length === 1 ? "y" : "ies" });
+  if (skipped > 0) statusText += t("ext.importAppsSkipped", { count: skipped, plural: skipped === 1 ? "" : "s" });
+  if (invalid > 0) statusText += t("ext.importAppsInvalid", { count: invalid });
   if (warnings.length > 0) statusText += ` ${warnings.join(" ")}`;
   migrationPreviewStatus.textContent = statusText;
   migrationPreviewList.innerHTML = "";
@@ -512,7 +516,7 @@ function renderMigrationPreview() {
     if (entry.type === "hotp") summaryParts.push(`HOTP #${entry.counter}`);
     if (entry.algorithm && entry.algorithm !== "SHA1") summaryParts.push(entry.algorithm.replace(/^SHA/, "SHA-"));
     const text = document.createElement("span");
-    text.textContent = entry.duplicateHint ? `${summaryParts.join(" • ")} (already in vault)` : summaryParts.join(" • ");
+    text.textContent = entry.duplicateHint ? `${summaryParts.join(" • ")}${t("ext.alreadyInVaultSuffix")}` : summaryParts.join(" • ");
 
     row.append(checkbox, text);
     migrationPreviewList.appendChild(row);
@@ -529,7 +533,7 @@ async function commitMigrationPreview() {
     const candidate = migrationPreviewState.candidates[index];
     return [normalizeEntry({ ...candidate, order: nextOrder + index })];
   });
-  if (selected.length === 0) throw new Error("Select at least one entry to import");
+  if (selected.length === 0) throw new Error(t("import.selectAtLeastOne"));
   await replaceEntries([...entries, ...selected]);
   migrationPreviewState = null;
 }
@@ -613,17 +617,17 @@ async function undoDelete(items) {
     reinserted += 1;
   }
   if (reinserted === 0) {
-    setMainStatus("Nothing to undo — those entries already exist again", "warning");
+    setMainStatus(t("ext.undoNothing"), "warning");
     return;
   }
   await replaceEntries(nextEntries);
-  setMainStatus(`Restored ${reinserted} entr${reinserted === 1 ? "y" : "ies"}`, "success");
+  setMainStatus(reinserted === 1 ? t("import.restoredOne") : t("import.restoredMany", { count: reinserted }), "success");
 }
 
 async function offerUndoDelete(items) {
   await writeUndoTombstone(items);
   undoTombstone = items;
-  setMainStatus(`${items.length === 1 ? "Entry removed" : `${items.length} entries removed`} — reopening this popup offers Undo for 10 minutes`, "warning");
+  setMainStatus(items.length === 1 ? t("ext.undoRemovedOne") : t("ext.undoRemovedMany", { count: items.length }), "warning");
   setTimeout(async () => {
     if (undoTombstone === items) {
       undoTombstone = null;
@@ -640,13 +644,13 @@ async function offerUndoFromTombstone() {
   const status = document.getElementById("status");
   if (!status) return;
   status.textContent = items.length === 1
-    ? "An entry was deleted before this popup closed. Undo?"
-    : `${items.length} entries were deleted before this popup closed. Undo?`;
+    ? t("ext.undoOfferOne")
+    : t("ext.undoOfferMany", { count: items.length });
   status.classList.add("error");
   const undoBtn = document.createElement("button");
   undoBtn.type = "button";
   undoBtn.className = "ghost-btn";
-  undoBtn.textContent = "Undo delete";
+  undoBtn.textContent = t("ext.undoDelete");
   undoBtn.addEventListener("click", async () => {
     undoBtn.remove();
     await undoDelete(items);
@@ -682,13 +686,13 @@ async function exportBackup() {
   const previousPassphrase = currentPassphrase;
   // FR12 gate. FR10: the passphrase path below always emits a standard
   // envelope (no `dek` block), restorable by passphrase alone on any version.
-  await requirePassphrase("export a backup");
+  await requirePassphrase(t("ext.actionExportBackup"));
   try {
     let envelope;
     if (settings.encrypt) {
-      if (!currentPassphrase) throw new Error("Unlock the extension vault before exporting an encrypted backup");
+      if (!currentPassphrase) throw new Error(t("ext.exportNeedsUnlock"));
       const encryptedPayload = await encryptEntries(entries, currentPassphrase);
-      envelope = await createEncryptedBackup(encryptedPayload);
+      envelope = await createEncryptedBackup(encryptedPayload, currentPassphrase);
     } else {
       envelope = await createPlainBackup(entries);
     }
@@ -710,13 +714,21 @@ function renderBackupReminder() {
   if (!line) return;
   if (shouldWarnBackup(settings, entries.length)) {
     line.textContent = settings.lastBackupAt
-      ? "No export in over 30 days — export a backup below."
-      : entries.length > 0 ? "No export yet — back this vault up below." : "";
+      ? t("backup.reminderExtensionOld")
+      : entries.length > 0 ? t("backup.reminderExtensionNoExport") : "";
     line.classList.remove("hidden");
     return;
   }
-  const days = Math.floor((Date.now() - Number(settings.lastBackupAt)) / 86400000);
-  line.textContent = `Last export: ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`} (checksum ${String(settings.lastBackupHash || "").slice(0, 8)}). A cancelled download cannot be detected.`;
+  const lastBackupAt = Number(settings.lastBackupAt);
+  if (!Number.isFinite(lastBackupAt) || lastBackupAt <= 0) {
+    line.textContent = t("backup.lastExportNever");
+    return;
+  }
+  const days = Math.floor((Date.now() - lastBackupAt) / 86400000);
+  const exportAge = days === 0 ? t("backup.lastExportToday")
+    : days === 1 ? t("backup.lastExportOneDay")
+    : t("backup.lastExportDays", { days });
+  line.textContent = `${exportAge}${t("backup.lastExportChecksum", { hash: String(settings.lastBackupHash || "").slice(0, 8) })}${t("backup.lastExportShortSuffix")}`;
 }
 
 // --- Time drift (Phase 5) ---
@@ -742,7 +754,7 @@ async function checkTimeDrift() {
 
 function renderPassphraseStrength(input, meterRoot) {
   if (!input || !meterRoot) return;
-  const assessment = assessPassphraseStrength(input.value);
+  const assessment = translateStrengthAssessment(assessPassphraseStrength(input.value));
   meterRoot.classList.toggle("hidden", input.value.length === 0);
   const fill = meterRoot.querySelector(".strength-fill");
   if (fill) fill.dataset.score = String(assessment.score);
@@ -762,19 +774,19 @@ function bindPassphraseStrengthMeters() {
 
 async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
   if (!settings.encrypt) {
-    throw new Error("Enable encrypted storage before changing the extension passphrase");
+    throw new Error(t("ext.changePassphraseNeedsEncryption"));
   }
   const previousPassphrase = currentPassphrase;
   if (!previousPassphrase) {
-    await requirePassphrase("change the extension passphrase");
+    await requirePassphrase(t("ext.actionChangePassphrase"));
   }
   if (currentPassphraseCandidate !== currentPassphrase) {
     releasePassphrase(previousPassphrase);
-    throw new Error("Current passphrase is incorrect");
+    throw new Error(t("vault.currentIncorrect"));
   }
   if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
     releasePassphrase(previousPassphrase);
-    throw new Error("Passphrase confirmation does not match");
+    throw new Error(t("vault.confirmationMismatch"));
   }
   const normalizedNext = normalizePassphrase(nextPassphraseCandidate);
   const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
@@ -930,19 +942,19 @@ function resequenceIfUnordered(decrypted) {
 async function unlockWithBiometrics() {
   const guard = await readUnlockGuard();
   if (guard.lockedUntil > Date.now()) {
-    setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - Date.now()) / 1000)}s`, "error");
+    setUnlockStatus(t("ext.tooManyAttempts", { seconds: Math.ceil((guard.lockedUntil - Date.now()) / 1000) }), "error");
     return;
   }
   const record = await readBiometricRecord();
   if (!record) {
-    setUnlockStatus("No biometric unlock is enrolled on this device", "error");
+    setUnlockStatus(t("ext.noBiometricEnrolled"), "error");
     return;
   }
   const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
   const payload = stored[ENCRYPTED_KEY];
   if (!payload || !isDekEncryptedPayload(payload)) {
     await reconcileOrphanedBiometricRecord();
-    setUnlockStatus("Biometric unlock is no longer available — use your passphrase", "error");
+    setUnlockStatus(t("ext.biometricUnavailable"), "error");
     return;
   }
   try {
@@ -960,11 +972,11 @@ async function unlockWithBiometrics() {
     setLocked(false);
     renderEntries();
     tick();
-    setUnlockStatus("Vault unlocked with biometrics", "success");
-    setMainStatus("Encrypted extension unlocked", "success");
+    setUnlockStatus(t("unlock.statusBiometricSuccess"), "success");
+    setMainStatus(t("ext.unlocked"), "success");
   } catch (error) {
     reportError("Biometric unlock failed", error);
-    setUnlockStatus(toUserMessage(error, "Biometric unlock failed — use your passphrase"), "error");
+    setUnlockStatus(toUserMessage(error, t("ext.biometricUnlockFailed")), "error");
   }
 }
 
@@ -974,15 +986,15 @@ async function unlockWithBiometrics() {
 // extension origin by default (cross-origin credentials are impossible).
 async function enrollVaultBiometrics() {
   if (!settings.encrypt) {
-    throw new Error("Enable encrypted storage before enabling biometric unlock");
+    throw new Error(t("ext.enrollNeedsEncryption"));
   }
   if (!currentPassphrase && !heldDek) {
-    throw new Error("Unlock the extension vault before enabling biometric unlock");
+    throw new Error(t("ext.enrollNeedsUnlock"));
   }
   const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
   const payload = stored[ENCRYPTED_KEY];
   if (payload && !isDekEncryptedPayload(payload) && !currentPassphrase) {
-    throw new Error("Unlock the extension vault before enabling biometric unlock");
+    throw new Error(t("ext.enrollNeedsUnlock"));
   }
   const enrollment = await enrollBiometricUnlock({});
   const prfSalt = enrollment.prfSalt;
@@ -1030,13 +1042,13 @@ async function enrollVaultBiometrics() {
 async function disenrollVaultBiometrics() {
   const record = await readBiometricRecord();
   if (!record) {
-    setMainStatus("Biometric unlock is not enabled", "error");
+    setMainStatus(t("settings.biometricNotEnabled"), "error");
     return;
   }
-  const confirmed = window.confirm("Disable biometric unlock? The vault returns to passphrase-only storage.");
+  const confirmed = window.confirm(`${t("settings.biometricDisableTitle")} ${t("settings.biometricDisableText")}`);
   if (!confirmed) return;
   const previousPassphrase = currentPassphrase;
-  await requirePassphrase("disable biometric unlock");
+  await requirePassphrase(t("ext.actionDisableBiometric"));
   try {
     const restored = await encryptEntries(entries, currentPassphrase);
     await chrome.storage.local.set({ [ENCRYPTED_KEY]: restored });
@@ -1044,7 +1056,7 @@ async function disenrollVaultBiometrics() {
     await clearSessionUnlock();
     heldDek = null;
     dekEnvelopeMeta = null;
-    setMainStatus("Biometric unlock disabled — passphrase-only vault restored", "success");
+    setMainStatus(t("settings.biometricDisabled"), "success");
   } finally {
     releasePassphrase(previousPassphrase);
   }
@@ -1071,10 +1083,10 @@ function renderBiometricControls() {
       statusLine.textContent = !biometricCapable
         ? ""
         : record
-          ? "Biometric unlock is enrolled. Your passphrase remains the recovery method."
+          ? t("settings.extensionBiometricEnrolled")
           : settings.encrypt
-            ? "Unlock with your platform authenticator instead of your passphrase."
-            : "Enable encrypted storage first, then enroll biometric unlock.";
+            ? t("settings.extensionBiometricAvailable")
+            : t("settings.biometricNeedsEncryption");
     }
     const unlockBiometricBtn = document.getElementById("biometric-unlock-btn");
     if (unlockBiometricBtn) {
@@ -1101,7 +1113,7 @@ function openEditEntryDialog(entry) {
 async function saveEditedEntry() {
   const id = editEntryIdInput.value;
   const current = entries.find((entry) => entry.id === id);
-  if (!current) throw new Error("Entry no longer exists");
+  if (!current) throw new Error(t("edit.noLongerExists"));
 
   const updated = normalizeEntry({
     ...current,
@@ -1116,7 +1128,7 @@ async function saveEditedEntry() {
   });
 
   if (entries.some((entry) => entry.id !== id && entry.secret === updated.secret && entry.digits === updated.digits && entry.period === updated.period)) {
-    throw new Error("Another entry already uses this secret, digits, and period");
+    throw new Error(t("edit.duplicate"));
   }
 
   await replaceEntries(entries.map((entry) => (entry.id === id ? updated : entry)));
@@ -1202,10 +1214,10 @@ async function endEntryDrag(event) {
   ordered.splice(Math.min(target, ordered.length), 0, moved);
   try {
     await replaceEntries(resequenceEntries(ordered));
-    setMainStatus("Manual order updated", "success");
+    setMainStatus(t("entries.manualOrderUpdated"), "success");
   } catch (error) {
     reportError("Extension drag reorder failed", error);
-    setMainStatus(toUserMessage(error, "Could not reorder entries"), "error");
+    setMainStatus(toUserMessage(error, t("vault.reorderFailed")), "error");
   }
 }
 
@@ -1230,11 +1242,11 @@ function createEntryNode(entry) {
       // Progressive enhancement: silent no-op where unsupported (iOS Safari).
       navigator.vibrate?.(20);
       addCopyHistory(entry.label, otp);
-      setMainStatus(`Copied ${parseLabelParts(entry.label).issuer} code`, "success");
+      setMainStatus(t("ext.copiedIssuer", { issuer: parseLabelParts(entry.label).issuer }), "success");
       await consumeHotpCounter(entry);
     } catch (error) {
       reportError("Extension copy failed", error);
-      setMainStatus(toUserMessage(error, "Could not copy OTP"), "error");
+      setMainStatus(toUserMessage(error, t("vault.copyFailedShort")), "error");
     }
   });
 
@@ -1245,12 +1257,16 @@ function createEntryNode(entry) {
       await replaceEntries(entries.map((item) => item.id === currentEntry.id ? { ...item, counter: item.counter + 1 } : item));
     } catch (error) {
       reportError("HOTP counter persist failed (copy)", error);
-      setMainStatus("Counter save failed — the next code may repeat. Edit the entry to set the counter manually.", "error");
+      setMainStatus(t("ext.counterSaveFailed"), "error");
     }
   }
 
   node.querySelector(".edit")?.addEventListener("click", () => {
     openEditEntryDialog(entry);
+  });
+
+  node.querySelector(".qr")?.addEventListener("click", () => {
+    openQrExport(entry);
   });
 
   node.querySelector(".move-up")?.addEventListener("click", async () => {
@@ -1259,7 +1275,7 @@ function createEntryNode(entry) {
       sortSelect.value = "custom";
       await persistSettings();
       await moveEntry(entry.id, -1);
-      setMainStatus("Manual order updated", "success");
+      setMainStatus(t("entries.manualOrderUpdated"), "success");
     } catch (error) {
       reportError("Extension move up failed", error);
       setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
@@ -1272,7 +1288,7 @@ function createEntryNode(entry) {
       sortSelect.value = "custom";
       await persistSettings();
       await moveEntry(entry.id, 1);
-      setMainStatus("Manual order updated", "success");
+      setMainStatus(t("entries.manualOrderUpdated"), "success");
     } catch (error) {
       reportError("Extension move down failed", error);
       setMainStatus(toUserMessage(error, "Could not reorder entry"), "error");
@@ -1281,15 +1297,15 @@ function createEntryNode(entry) {
 
   node.querySelector(".remove").addEventListener("click", async () => {
     try {
-      const confirmed = await showRemoveConfirmation(`Remove "${entry.label}" from the extension vault? You can undo for 10 minutes by reopening the popup.`);
+      const confirmed = await showRemoveConfirmation(t("ext.removeConfirm", { label: entry.label }));
       if (!confirmed) return;
       const index = entries.findIndex((item) => item.id === entry.id);
       await replaceEntries(entries.filter((item) => item.id !== entry.id));
-      setMainStatus("Removed entry", "success");
+      setMainStatus(t("ext.removedEntry"), "success");
       if (index >= 0) await offerUndoDelete([{ entry, index }]);
     } catch (error) {
       reportError("Extension remove failed", error);
-      setMainStatus(toUserMessage(error, "Could not remove entry"), "error");
+      setMainStatus(toUserMessage(error, t("vault.removeFailed")), "error");
     }
   });
 
@@ -1298,13 +1314,13 @@ function createEntryNode(entry) {
 
 function renderEntries() {
   if (!unlockPanel.classList.contains("hidden")) {
-    entriesRoot.innerHTML = '<div class="empty-state">Vault is locked. Unlock to view and use your codes.</div>';
+    entriesRoot.innerHTML = `<div class="empty-state">${t("ext.locked")}</div>`;
     return;
   }
 
   const visible = filteredEntries();
   if (visible.length === 0) {
-    entriesRoot.innerHTML = '<div class="empty-state">No entries yet. Add one, import a QR file, or paste an otpauth URI.</div>';
+    entriesRoot.innerHTML = `<div class="empty-state">${t("ext.noEntries")}</div>`;
     return;
   }
 
@@ -1337,7 +1353,7 @@ async function updateEntryNode(entry, now) {
     if (entry.type === "hotp") {
       // HOTP renders the deterministic code for the persisted counter; the
       // counter advances only on copy (no rolling timer, FR8).
-      node.querySelector(".seconds").textContent = `#${entry.counter}`;
+      node.querySelector(".seconds").textContent = t("ext.hotpCounterBadge", { counter: entry.counter });
       node.querySelector(".bar").style.transform = "scaleX(1)";
       const hotpRing = node.querySelector(".ring-progress");
       if (hotpRing) hotpRing.style.strokeDashoffset = "0";
@@ -1346,7 +1362,7 @@ async function updateEntryNode(entry, now) {
     } else {
       const remaining = entry.period - (now % entry.period);
       code = await generateTotp(entry.secret, entry.digits, entry.period, now, entry.algorithm);
-      node.querySelector(".seconds").textContent = `${remaining}s`;
+      node.querySelector(".seconds").textContent = t("ext.secondsBadge", { seconds: remaining });
       node.querySelector(".bar").style.transform = `scaleX(${remaining / entry.period})`;
       const ring = node.querySelector(".ring-progress");
       // Style-only write, O(1) per card per tick (NFR3).
@@ -1357,7 +1373,7 @@ async function updateEntryNode(entry, now) {
     node.querySelector(".code").textContent = formatCode(code);
   } catch (error) {
     reportError("Extension OTP generation failed", error);
-    node.querySelector(".code").textContent = "Invalid";
+    node.querySelector(".code").textContent = t("entries.invalidShort");
     node.dataset.otp = "";
   }
 }
@@ -1440,7 +1456,7 @@ async function persistEntries() {
         const stored = await chrome.storage.local.get(ENCRYPTED_KEY);
         const payload = stored[ENCRYPTED_KEY];
         if (!payload || !isDekEncryptedPayload(payload) || !dekEnvelopeMeta) {
-          throw new Error("Biometric vault envelope is missing — unlock with your passphrase to restore it");
+          throw new Error(t("ext.envelopeMissing"));
         }
         const envelope = await encryptEntriesWithDek(entries, heldDek, dekEnvelopeMeta);
         await chrome.storage.local.set({ [ENCRYPTED_KEY]: envelope });
@@ -1448,7 +1464,7 @@ async function persistEntries() {
         await refreshSessionCacheForDek(envelope);
         return;
       }
-      if (!currentPassphrase) throw new Error("Unlock extension vault before saving encrypted entries");
+      if (!currentPassphrase) throw new Error(t("ext.encryptionRequiresUnlock"));
       await saveEncryptedEntries(entries, currentPassphrase);
       return;
     }
@@ -1485,26 +1501,80 @@ async function replaceEntries(nextEntries) {
 
 async function addEntry(input) {
   const entry = normalizeEntry({ ...input, order: nextOrderValue() });
-  if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+  if (hasDuplicateEntry(entries, entry)) throw new Error(t("ext.accountExists"));
   await replaceEntries([...entries, entry]);
 }
 
 async function importFromQrFile(file) {
   if (typeof BarcodeDetector !== "function") {
-    throw new Error("QR file import requires Chrome BarcodeDetector support");
+    throw new Error(t("ext.qrNeedsBarcodeDetector"));
   }
   const bitmap = await createImageBitmap(file);
   const detector = new BarcodeDetector({ formats: ["qr_code"] });
   const results = await detector.detect(bitmap);
   bitmap.close();
   if (!results.length || !results[0].rawValue) {
-    throw new Error("Could not detect a QR code in that file");
+    throw new Error(t("ext.qrNotDetected"));
   }
   const uri = extractOtpAuthUri(results[0].rawValue);
   if (!uri) {
-    throw new Error("QR code was detected but does not contain a valid OTP URI");
+    throw new Error(t("ext.qrNoOtpUri"));
   }
   return normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
+}
+
+// --- Aegis / 2FAS export import (file-based third-party migration) ---
+
+async function importThirdPartyFile(file) {
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error(t("import.fileTooLarge"));
+  }
+  const text = await file.text();
+  const result = parseThirdPartyImport(text);
+  const warnings = [...result.warnings];
+  const candidates = [];
+  let skipped = 0;
+  let invalid = 0;
+  for (const candidate of result.entries) {
+    try {
+      const entry = normalizeEntry(candidate);
+      const isDuplicate = hasDuplicateEntry(entries, entry)
+        || candidates.some((existing) => existing.secret === entry.secret && existing.label === entry.label);
+      if (isDuplicate) {
+        candidates.push({ ...entry, duplicateHint: true });
+        skipped += 1;
+        continue;
+      }
+      candidates.push(entry);
+    } catch (error) {
+      invalid += 1;
+      warnings.push(toUserMessage(error, t("import.mapFailed")));
+    }
+  }
+  if (candidates.length === 0) {
+    throw new Error(t("vault.noImportable", { source: result.format, details: warnings.length ? `: ${warnings.join(" ")}` : "" }));
+  }
+  openMigrationPreview({ candidates, skipped, invalid, warnings, sourceLabel: result.format });
+}
+
+// --- Single-entry QR export (move an entry to another authenticator app) ---
+
+async function openQrExport(entry) {
+  if (!qrExportDialog || !qrExportCanvas) return;
+  qrExportUri = buildOtpAuthUri(entry);
+  qrExportTitle.textContent = `${parseLabelParts(entry.label).issuer} — ${t("qr.heading")}`;
+  setStatus(qrExportStatus, "");
+  try {
+    await QRCode.toCanvas(qrExportCanvas, qrExportUri, {
+      width: 220,
+      margin: 2,
+      color: { dark: "#111318", light: "#ffffff" },
+    });
+    qrExportDialog.showModal();
+  } catch (error) {
+    reportError("Extension QR export failed", error);
+    setMainStatus(toUserMessage(error, t("qr.renderFailed")), "error");
+  }
 }
 
 function bindEvents() {
@@ -1526,10 +1596,10 @@ function bindEvents() {
       digitsInput.value = "6";
       periodInput.value = "30";
       counterInput?.classList.add("hidden");
-      setMainStatus("Entry added", "success");
+      setMainStatus(t("add.entryAdded"), "success");
     } catch (error) {
       reportError("Extension manual entry failed", error);
-      setMainStatus(toUserMessage(error, "Could not add entry"), "error");
+      setMainStatus(toUserMessage(error, t("vault.addFailed")), "error");
     }
   });
 
@@ -1542,12 +1612,12 @@ function bindEvents() {
     if (!file) return;
     try {
       const entry = await importFromQrFile(file);
-      if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+      if (hasDuplicateEntry(entries, entry)) throw new Error(t("ext.accountExists"));
       await replaceEntries([...entries, entry]);
-      setMainStatus("Imported QR entry", "success");
+      setMainStatus(t("ext.importedQr"), "success");
     } catch (error) {
       reportError("Extension QR import failed", error);
-      setMainStatus(toUserMessage(error, "Could not import QR file"), "error");
+      setMainStatus(toUserMessage(error, t("ext.qrImportFailed")), "error");
     } finally {
       qrFileInput.value = "";
     }
@@ -1560,7 +1630,7 @@ function bindEvents() {
         hasClipboardRead = await chrome.permissions.request({ permissions: ["clipboardRead"] });
       }
       if (!hasClipboardRead) {
-        throw new Error("Clipboard permission denied. Copy the URI into the secret field instead.");
+        throw new Error(t("ext.clipboardDenied"));
       }
       const text = await navigator.clipboard.readText();
       // Google Authenticator migration exports take priority over plain URIs.
@@ -1570,14 +1640,14 @@ function bindEvents() {
         return;
       }
       const uri = extractOtpAuthUri(text);
-      if (!uri) throw new Error("Clipboard does not contain a valid OTP URI");
+      if (!uri) throw new Error(t("ext.noClipboardUri"));
       const entry = normalizeEntry({ ...parseOtpAuthUri(uri), order: nextOrderValue() });
-      if (hasDuplicateEntry(entries, entry)) throw new Error("This account already exists");
+      if (hasDuplicateEntry(entries, entry)) throw new Error(t("ext.accountExists"));
       await replaceEntries([...entries, entry]);
-      setMainStatus("Imported URI from clipboard", "success");
+      setMainStatus(t("ext.importedUri"), "success");
     } catch (error) {
       reportError("Extension clipboard import failed", error);
-      setMainStatus(toUserMessage(error, "Could not import URI"), "error");
+      setMainStatus(toUserMessage(error, t("ext.uriImportFailed")), "error");
     }
   });
 
@@ -1588,17 +1658,17 @@ function bindEvents() {
         hasClipboardRead = await chrome.permissions.request({ permissions: ["clipboardRead"] });
       }
       if (!hasClipboardRead) {
-        throw new Error("Clipboard permission denied. Copy the export URI and try again.");
+        throw new Error(t("ext.clipboardDeniedGa"));
       }
       const text = await navigator.clipboard.readText();
       const migration = collectMigrationPayloads(text);
       if (migration.payloads.length === 0) {
-        throw new Error(migration.warnings[0] || "Clipboard does not contain a Google Authenticator export");
+        throw new Error(migration.warnings[0] || t("ext.noClipboardGa"));
       }
       stageMigrationPayloads(migration.payloads, "Google Authenticator");
     } catch (error) {
       reportError("Extension GA import failed", error);
-      setMainStatus(toUserMessage(error, "Could not import the Google Authenticator export"), "error");
+      setMainStatus(toUserMessage(error, t("import.gaFailed")), "error");
     }
   });
 
@@ -1608,10 +1678,10 @@ function bindEvents() {
     try {
       await commitMigrationPreview();
       migrationPreviewDialog?.close("accept");
-      setMainStatus("Google Authenticator entries imported", "success");
+      setMainStatus(t("ext.imported"), "success");
     } catch (error) {
       reportError("Extension GA preview commit failed", error);
-      setMainStatus(toUserMessage(error, "Could not import entries"), "error");
+      setMainStatus(toUserMessage(error, t("import.commitFailed")), "error");
     }
   });
 
@@ -1619,24 +1689,53 @@ function bindEvents() {
     migrationPreviewState = null;
   });
 
+  importAppsInput?.addEventListener("change", async () => {
+    const [file] = importAppsInput.files || [];
+    if (!file) return;
+    setMainStatus(t("import.appsReading"));
+    try {
+      await importThirdPartyFile(file);
+    } catch (error) {
+      reportError("Extension Aegis/2FAS import failed", error);
+      setMainStatus(toUserMessage(error, t("import.appsFileFailed")), "error");
+    } finally {
+      importAppsInput.value = "";
+    }
+  });
+
+  copyQrUriBtn?.addEventListener("click", async () => {
+    if (!qrExportUri) return;
+    try {
+      await navigator.clipboard.writeText(qrExportUri);
+      setStatus(qrExportStatus, t("qr.copiedUri"), "success");
+    } catch (error) {
+      reportError("Extension QR URI copy failed", error);
+      setStatus(qrExportStatus, toUserMessage(error, t("toast.copyFailed")), "error");
+    }
+  });
+  qrExportDialog?.addEventListener("close", () => {
+    qrExportUri = "";
+    setStatus(qrExportStatus, "");
+  });
+
   exportBackupBtn?.addEventListener("click", async () => {
     try {
       await exportBackup();
       renderBackupReminder();
-      setMainStatus("Backup exported", "success");
+      setMainStatus(t("settings.exportBackupDone"), "success");
     } catch (error) {
       reportError("Extension backup export failed", error);
-      setMainStatus(toUserMessage(error, "Could not export backup"), "error");
+      setMainStatus(toUserMessage(error, t("settings.exportBackupFailed")), "error");
     }
   });
 
   document.getElementById("check-drift-btn")?.addEventListener("click", async () => {
     if (!settings.timeDriftCheck) {
-      setMainStatus("Enable the time-drift check first", "warning");
+      setMainStatus(t("settings.driftCheckFirst"), "warning");
       return;
     }
     await checkTimeDrift();
-    setMainStatus("Time check complete — see the banner if your clock is off", "success");
+    setMainStatus(t("settings.driftCheckDone"), "success");
   });
   document.getElementById("drift-dismiss")?.addEventListener("click", () => {
     document.getElementById("drift-banner")?.classList.add("hidden");
@@ -1683,10 +1782,10 @@ function bindEvents() {
       currentPassphraseInput.value = "";
       newPassphraseInput.value = "";
       newPassphraseConfirmInput.value = "";
-      setMainStatus("Extension passphrase updated", "success");
+      setMainStatus(t("settings.extensionPassphraseUpdated"), "success");
     } catch (error) {
       reportError("Extension change passphrase failed", error);
-      setMainStatus(toUserMessage(error, "Could not update passphrase"), "error");
+      setMainStatus(toUserMessage(error, t("settings.updateFailed")), "error");
     }
   });
 
@@ -1707,6 +1806,10 @@ function bindEvents() {
         settings.theme = themeSelect.value;
         applyTheme();
       }
+      if (languageSelect) {
+        settings.locale = languageSelect.value;
+        applyLocale();
+      }
       if (settings.encrypt) {
         let nextPassphrase = currentPassphrase;
         if (!nextPassphrase) {
@@ -1715,12 +1818,12 @@ function bindEvents() {
             passphraseConfirmInput.value = "";
             await persistSettings();
             renderBiometricControls();
-            setMainStatus("Encrypted extension vault saved", "success");
+            setMainStatus(t("settings.extensionStatusEncryptedSaved"), "success");
             return;
           }
           const first = passphraseInput.value.trim();
           const second = passphraseConfirmInput.value.trim();
-          if (first !== second) throw new Error("Passphrase confirmation does not match");
+          if (first !== second) throw new Error(t("vault.confirmationMismatch"));
           nextPassphrase = normalizePassphrase(first);
         }
         currentPassphrase = nextPassphrase;
@@ -1743,7 +1846,7 @@ function bindEvents() {
       passphraseFields.classList.toggle("hidden", !settings.encrypt || encryptedVaultExists);
       passphraseGuidance?.classList.toggle("hidden", !encryptedVaultExists);
       setMainStatus(
-        encryptedVaultExists ? "Encrypted extension vault saved. Use Change Passphrase to rotate your extension secret." : settings.encrypt ? "Encrypted extension vault saved" : "Extension storage is now plain local storage",
+        encryptedVaultExists ? t("settings.extensionStatusEncryptedGuidance") : settings.encrypt ? t("settings.extensionStatusEncryptedSaved") : t("settings.extensionStatusPlain"),
         "success"
       );
       renderBiometricControls();
@@ -1756,13 +1859,13 @@ function bindEvents() {
       lockBtn.disabled = !settings.encrypt;
       changePassphraseBtn.classList.toggle("hidden", !settings.encrypt || !unlockPanel.classList.contains("hidden"));
       reportError("Extension save security failed", error);
-      setMainStatus(toUserMessage(error, "Could not save security settings"), "error");
+      setMainStatus(toUserMessage(error, t("settings.extensionSaveFailed")), "error");
     }
   });
 
   lockBtn.addEventListener("click", () => {
     if (!settings.encrypt) {
-      setMainStatus("Enable encrypted storage first", "error");
+      setMainStatus(t("ext.lockNeedsEncryption"), "error");
       return;
     }
     lockVault();
@@ -1774,10 +1877,10 @@ function bindEvents() {
   document.getElementById("enroll-biometric-btn")?.addEventListener("click", async () => {
     try {
       await enrollVaultBiometrics();
-      setMainStatus("Biometric unlock enabled on this device", "success");
+      setMainStatus(t("settings.biometricEnabled"), "success");
     } catch (error) {
       reportError("Biometric enrollment failed", error);
-      setMainStatus(toUserMessage(error, "Could not enable biometric unlock"), "error");
+      setMainStatus(toUserMessage(error, t("vault.biometricEnrollmentFailed")), "error");
       renderBiometricControls();
     }
   });
@@ -1786,7 +1889,7 @@ function bindEvents() {
       await disenrollVaultBiometrics();
     } catch (error) {
       reportError("Biometric disenroll failed", error);
-      setMainStatus(toUserMessage(error, "Could not disable biometric unlock"), "error");
+      setMainStatus(toUserMessage(error, t("vault.biometricDisenrollFailed")), "error");
     }
   });
 
@@ -1802,7 +1905,7 @@ function bindEvents() {
       const guard = await readUnlockGuard();
       const now = Date.now();
       if (guard.lockedUntil > now) {
-        setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - now) / 1000)}s`, "error");
+        setUnlockStatus(t("ext.tooManyAttempts", { seconds: Math.ceil((guard.lockedUntil - now) / 1000) }), "error");
         return;
       }
       unlockBtn.disabled = true;
@@ -1840,15 +1943,15 @@ function bindEvents() {
         setLocked(false);
         renderEntries();
         tick();
-        setUnlockStatus("Vault unlocked", "success");
-        setMainStatus("Encrypted extension unlocked", "success");
+        setUnlockStatus(t("unlock.extensionStatusSuccess"), "success");
+        setMainStatus(t("ext.unlocked"), "success");
       } catch (error) {
         const attempts = guard.attempts + 1;
         const backoff = unlockBackoffSeconds(attempts);
         await writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
-        const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
+        const suffix = attempts >= 3 ? t("ext.lockedForSuffix", { seconds: backoff }) : "";
         reportError("Extension unlock failed", error);
-        setUnlockStatus(toUserMessage(error, "Incorrect passphrase or unreadable encrypted data") + suffix, "error");
+        setUnlockStatus(toUserMessage(error, t("ext.incorrectPassphrase")) + suffix, "error");
       } finally {
         unlockBtn.disabled = false;
       }
@@ -1866,9 +1969,9 @@ function bindEvents() {
     try {
       await saveEditedEntry();
       editEntryDialog.close("accept");
-      setMainStatus("Entry updated", "success");
+      setMainStatus(t("entries.updated"), "success");
     } catch (error) {
-      setStatus(editStatus, toUserMessage(error, "Could not update entry"), "error");
+      setStatus(editStatus, toUserMessage(error, t("vault.updateFailed")), "error");
     }
   });
 

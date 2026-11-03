@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   detect-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     outputs:
       current_version: ${{ steps.version.outputs.current_version }}
@@ -76,7 +76,7 @@ jobs:
   package:
     needs: detect-version
     if: needs.detect-version.outputs.version_changed == 'true' && needs.detect-version.outputs.release_exists != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4

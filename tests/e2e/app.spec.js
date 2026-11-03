@@ -634,7 +634,8 @@ test("encrypted backup import with a different passphrase must not silently chan
         tags: [],
         createdAt: FIXED_NOW,
       },
-    ], passphraseB)
+    ], passphraseB),
+    passphraseB
   )), "utf8");
 
   await page.reload();

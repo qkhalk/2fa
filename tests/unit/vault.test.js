@@ -15,6 +15,7 @@ import {
   parseBackupFile,
   shouldWarnBackup,
   unwrapDekWithPassphrase,
+  verifyBackupMac,
   wrapDekWithPassphrase,
 } from "../../lib/vault.js";
 
@@ -107,6 +108,28 @@ describe("vault helpers", () => {
     // 1000-iteration value was never used for derivation.
     const decrypted = await decryptVaultEntries(tampered, "correct horse battery");
     expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects kdf iterations above the sanity ceiling with VAULT_FIELDS", async () => {
+    const base = await encryptEntries(entries, "correct horse battery");
+    const bloated = { ...base, kdf: { ...base.kdf, iterations: 10000000 } };
+
+    expect(isLegacyEncryptedPayload(bloated)).toBe(false);
+    await expect(decryptVaultEntries(bloated, "correct horse battery")).rejects.toMatchObject({
+      code: "VAULT_FIELDS",
+    });
+    // The mac derivation resolves kdf params from the file too, so a crafted
+    // huge-iteration v3 backup fails closed instead of wedging the tab.
+    const craftedV3 = {
+      version: 3,
+      encrypted: true,
+      createdAt: null,
+      itemCount: 0,
+      checksum: "0".repeat(64),
+      mac: "a".repeat(64),
+      payload: { schemaVersion: 1, vault: bloated },
+    };
+    expect(await verifyBackupMac(craftedV3, "correct horse battery")).toBe(false);
   });
 
   it("rejects malformed kdf blocks with VAULT_FIELDS", async () => {
@@ -255,11 +278,13 @@ describe("vault helpers", () => {
   });
 
   it("parses encrypted backups", async () => {
-    const backup = createEncryptedBackup(await encryptEntries(entries, "correct horse battery"));
-    const parsed = await parseBackupFile(await backup);
+    const vault = await encryptEntries(entries, "correct horse battery");
+    const backup = await createEncryptedBackup(vault, "correct horse battery");
+    const parsed = await parseBackupFile(backup);
 
     expect(parsed.encrypted).toBe(true);
     expect(parsed.integrity).toBe("verified");
+    expect(parsed.macProtected).toBe(true);
     expect(parsed.vault).toHaveProperty("salt");
     expect(parsed.vault).toHaveProperty("iv");
     expect(parsed.vault).toHaveProperty("data");
@@ -489,5 +514,106 @@ describe("vault helpers", () => {
     await expect(decryptVaultEntries(payload, "correct horse battery")).rejects.toThrow(
       "Decrypted vault entries are invalid"
     );
+  });
+});
+
+describe("backup v3 keyed checksum", () => {
+  const entries = [
+    {
+      id: "entry_1",
+      label: "GitHub:user@example.com",
+      secret: "JBSWY3DPEHPK3PXP",
+      digits: 6,
+      period: 30,
+      pinned: false,
+      tags: [],
+      createdAt: 1,
+    },
+  ];
+  const PASSPHRASE = "correct horse battery";
+
+  function buildV2EncryptedBackup(vault, checksum) {
+    return {
+      version: 2,
+      encrypted: true,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      itemCount: 0,
+      checksum,
+      payload: { schemaVersion: 1, vault },
+    };
+  }
+
+  it("writes version 3 with a mac for encrypted backups and version 3 without one for plain backups", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const encrypted = await createEncryptedBackup(vault, PASSPHRASE);
+    expect(encrypted.version).toBe(3);
+    expect(typeof encrypted.mac).toBe("string");
+    expect(encrypted.mac).toMatch(/^[0-9a-f]{64}$/);
+
+    const plain = await createPlainBackup(entries);
+    expect(plain.version).toBe(3);
+    expect(plain.mac).toBeUndefined();
+  });
+
+  it("verifies the mac with the correct passphrase and rejects a wrong one", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const backup = await createEncryptedBackup(vault, PASSPHRASE);
+
+    expect(await verifyBackupMac(backup, PASSPHRASE)).toBe(true);
+    expect(await verifyBackupMac(backup, "wrong passphrase here")).toBe(false);
+  });
+
+  it("fails the mac check on a tampered mac or a tampered payload", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const backup = await createEncryptedBackup(vault, PASSPHRASE);
+
+    expect(await verifyBackupMac({ ...backup, mac: `${backup.mac.slice(0, -4)}0000` }, PASSPHRASE)).toBe(false);
+
+    const tamperedPayload = JSON.parse(JSON.stringify(backup));
+    tamperedPayload.payload.vault.data = tamperedPayload.payload.vault.data.slice(0, -8);
+    expect(await verifyBackupMac(tamperedPayload, PASSPHRASE)).toBe(false);
+  });
+
+  it("round-trips an encrypted v3 backup through parse, mac verification, and decryption", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const backup = await createEncryptedBackup(vault, PASSPHRASE);
+    const parsed = await parseBackupFile(backup);
+
+    expect(parsed.macProtected).toBe(true);
+    expect(await verifyBackupMac(backup, PASSPHRASE)).toBe(true);
+    const decrypted = await decryptVaultEntries(parsed.vault, PASSPHRASE);
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("still imports a v2 encrypted backup with integrity-only verification", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const payload = { schemaVersion: 1, vault };
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
+    const checksum = [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+    const parsed = await parseBackupFile(buildV2EncryptedBackup(vault, checksum));
+
+    expect(parsed.encrypted).toBe(true);
+    expect(parsed.integrity).toBe("verified");
+    expect(parsed.macProtected).toBe(false);
+    const decrypted = await decryptVaultEntries(parsed.vault, PASSPHRASE);
+    expect(decrypted).toEqual([expect.objectContaining(entries[0])]);
+  });
+
+  it("rejects a tampered v3 payload through the unkeyed checksum before any passphrase is used", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const backup = await createEncryptedBackup(vault, PASSPHRASE);
+    const tampered = { ...backup, payload: { ...backup.payload, schemaVersion: 999 } };
+
+    await expect(parseBackupFile(tampered)).rejects.toMatchObject({ code: "BACKUP_CHECKSUM_INVALID" });
+  });
+
+  it("returns false for v2 envelopes and malformed inputs", async () => {
+    const vault = await encryptEntries(entries, PASSPHRASE);
+    const payload = { schemaVersion: 1, vault };
+    const v2 = buildV2EncryptedBackup(vault, "0".repeat(64));
+
+    expect(await verifyBackupMac(v2, PASSPHRASE)).toBe(false);
+    expect(await verifyBackupMac(null, PASSPHRASE)).toBe(false);
+    expect(await verifyBackupMac({ version: 3, payload: { vault }, mac: "abcd" }, PASSPHRASE)).toBe(false);
   });
 });

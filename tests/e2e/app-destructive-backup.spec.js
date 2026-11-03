@@ -106,7 +106,7 @@ test("rejects encrypted backup import with wrong passphrase", async ({ page }) =
   await page.locator("#backup-import-passphrase").fill("wrong passphrase");
   await page.locator("#confirm-backup-import").click();
 
-  await expect(page.locator("#settings-status")).toContainText("Incorrect passphrase or unreadable encrypted data");
+  await expect(page.locator("#settings-status")).toContainText("Backup authenticity check failed");
   await expect(page.locator(".entry")).toHaveCount(0);
 });
 
@@ -250,7 +250,7 @@ test("allows retrying encrypted backup import after a wrong passphrase", async (
   await expect(page.locator("#backup-review-dialog")).toBeVisible();
   await page.locator("#backup-import-passphrase").fill("wrong passphrase");
   await page.locator("#confirm-backup-import").click();
-  await expect(page.locator("#settings-status")).toContainText("Incorrect passphrase or unreadable encrypted data");
+  await expect(page.locator("#settings-status")).toContainText("Backup authenticity check failed");
   await expect(page.locator("#backup-review-dialog")).toBeVisible();
 
   await page.locator("#backup-import-passphrase").fill(PASSPHRASE);

@@ -1,27 +1,28 @@
 # Codebase Summary
 
-Last updated: 2026-10-15
+Last updated: 2026-10-27
 
 ## Directory Layout
 
 ```
 2fa/
 ├── index.html              # Root PWA app entry point
-├── app.js                  # Main browser app
-├── styles.css              # App styles (token-based design system)
+├── app.js                  # Main browser app (~2500 lines)
+├── styles.css              # App styles
 ├── sw.js                   # Service worker for offline/PWA support
 ├── manifest.webmanifest   # PWA manifest
 ├── lib/
-│   ├── otp.js             # TOTP/HOTP engine, otpauth parsing, reorder math
-│   ├── vault.js           # KDF envelope + DEK mode (PBKDF2 + AES-GCM), backups
+│   ├── otp.js             # TOTP/HOTP engine, otpauth parsing, buildOtpAuthUri, reorder math
+│   ├── vault.js           # KDF envelope + DEK mode (PBKDF2 + AES-GCM), v3 backups (keyed HMAC)
 │   ├── migration.js       # Google Authenticator otpauth-migration decoder
+│   ├── importers.js       # Aegis + 2FAS export decoders (shared import preview)
 │   ├── biometric.js       # WebAuthn PRF ceremonies, KEK derivation, DEK wrap
-│   └── i18n.js            # String catalog framework (English seed)
+│   └── i18n.js            # String catalogs (complete English + Vietnamese) + DOM applier
 ├── fonts/                 # Vendored woff2 fonts (no third-party origins)
 ├── extension/
 │   ├── popup.js           # Extension popup entry point
 │   ├── popup.html         # Extension popup UI
-│   ├── popup.css          # Extension styles (same token vocabulary as styles.css)
+│   ├── popup.css          # Extension styles
 │   ├── manifest.json      # Chrome MV3 extension manifest
 │   ├── background.js      # Extension service worker
 │   └── icons/             # Extension-specific icons
@@ -98,9 +99,15 @@ TOTP and HOTP generation using Web Crypto API:
 Encryption and backup logic:
 - Key derivation: parameterized PBKDF2 envelope (600,000-iteration default, 150,000-iteration legacy floor; SHA-256, 16-byte salt; parameters travel in the envelope's `kdf` block)
 - Encryption: AES-256-GCM (12-byte IV, 16-byte auth tag)
-- Backup format version 2 with SHA-256 checksum
-- Automatic v1 → v2 migration
+- Backup format version 3: unkeyed SHA-256 checksum plus, for encrypted backups, a keyed HMAC-SHA256 `mac` derived from the passphrase with a domain-separated salt (`verifyBackupMac`); v2 (checksum only) and v1 still import
+- Automatic v1 → v2 migration; v2/v3 parse through the same envelope checks
 - Export/import with merge/replace support
+
+### `lib/importers.js`
+Third-party app import:
+- Aegis plain-text JSON exports (encrypted Aegis exports rejected with guidance — Web Crypto has no scrypt)
+- 2FAS app backups; group names become first tags
+- Shared fail-closed limits (file size, 500-entry cap) and the same candidate shape as the Google Authenticator flow
 
 ## Build System
 
@@ -127,7 +134,7 @@ Encryption and backup logic:
 ### Unit Tests (`tests/unit/`)
 - Framework: Vitest (Node.js environment)
 - Scope: Shared `lib/` modules only
-- Files: one Vitest file per `lib/` module (`otp`, `vault`, `migration`, `biometric`, `i18n`)
+- Files: one Vitest file per `lib/` module (`otp`, `vault`, `migration`, `importers`, `biometric`, `i18n`)
 - Focus: Domain logic, crypto operations, parsing, validation
 
 ### E2E Tests (`tests/e2e/`)

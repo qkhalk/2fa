@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.4.0 — 2026-10-28
+
+A migration-and-language wave: imports from Aegis and 2FAS, single-entry QR
+export, full i18n with a complete Vietnamese translation, and backup format
+v3 with a keyed checksum. Everything ships for BOTH the web app (PWA) and the
+Chrome extension popup unless noted otherwise.
+
+### Added
+
+- **Aegis + 2FAS import**: `lib/importers.js` decodes Aegis plain-text JSON
+  exports and 2FAS app backups into the shared import preview (per-entry
+  selection, duplicate pre-unchecking, group names imported as tags).
+  Encrypted Aegis exports are rejected with guidance to re-export unencrypted.
+  File picker lives in the Add sheet (web) and the import row (extension).
+- **Single-entry QR export**: a `QR` action on every entry renders its
+  `otpauth://` URI as a scannable QR code (vendored `qrcode` npm package,
+  bundled like `jsqr` — no CDN) with Copy URI (web + extension) and Download
+  PNG (web). `lib/otp.js` gains `buildOtpAuthUri`, round-trip tested through
+  `parseOtpAuthUri`.
+- **Extension keyboard shortcut**: `Ctrl+Shift+U` (`Cmd+Shift+U` on macOS)
+  opens the popup via the MV3 `commands` API.
+- **i18n completed + Vietnamese locale**: every user-visible string in both
+  frontends now resolves through `t()`; static HTML carries `data-i18n` /
+  `data-i18n-placeholder` / `data-i18n-aria-label` / `data-i18n-title`
+  attributes applied by `applyTranslations()`. A Language setting
+  (System/English/Tiếng Việt) joins Theme in both settings panels; `vi` ships
+  as a complete catalog (unit-tested to cover every English key). Passphrase
+  strength labels translate via `translateStrengthAssessment`.
+- **Backup format v3**: encrypted backups now carry a keyed HMAC-SHA256
+  checksum (`mac`) computed from a PBKDF2-derived key that domain-separates
+  from the AES key (info-prefixed salt), giving authenticity rather than
+  integrity-only (the old caveat #4). Import verifies the mac before
+  decryption and fails with a clear authenticity error on a wrong passphrase
+  or tampered file.
+
+### Changed
+
+- New exports write version 3. Plain (unencrypted) backups keep the unkeyed
+  SHA-256 checksum; encrypted backups add the keyed mac.
+- v1 and v2 backup files still import: v2 verifies via the unkeyed checksum,
+  v1 via the legacy lenient path, each with the existing warnings.
+- Service worker cache bumped to `otp-vault-cache-v8` (bundle changed).
+
+### Release notes — compatibility caveats
+
+1. **v3 backups require this release**: backups exported by this version
+   cannot be restored by pre-upgrade app versions ("Backup version is not
+   supported"). Export a fresh backup BEFORE upgrading and keep the old file,
+   or note that old versions can still read v2 files you already have.
+2. **Wrong passphrase on v3 encrypted backups** now fails at the keyed
+   checksum ("Backup authenticity check failed…") instead of the generic
+   decrypt error; behavior is stricter, the result the same.
+3. **`qrcode` joins `jsqr` as a runtime-bundled npm dependency**; the app
+   shell still loads no third-party origins.
+
 ## 0.3.0 — Product UI Redesign
 
 A full visual redesign of both the web app and the extension popup, executed as

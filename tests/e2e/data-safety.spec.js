@@ -126,7 +126,7 @@ test("backup reminder appears after 30 days and clears on export", async ({ page
   await page.getByRole("button", { name: "Export Backup" }).click();
   const download = await downloadPromise;
   const backup = JSON.parse(await readFile(await download.path(), "utf8"));
-  expect(backup.version).toBe(2);
+  expect(backup.version).toBe(3);
 
   await expect(page.locator("#last-export-line")).toContainText("Last export: today");
   await expect(page.locator("#backup-reminder-banner")).toBeHidden();

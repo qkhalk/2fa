@@ -8,17 +8,20 @@
 </head>
 <body>
   <div id="drift-banner" class="drift-banner hidden" role="alert">
-    <span>Device clock off by <span id="drift-skew"></span> — TOTP codes may be rejected.</span>
-    <button id="drift-dismiss" class="ghost-btn" type="button">Dismiss</button>
+    <span>
+      <span data-i18n="banner.driftPrefix">Device clock off by</span>
+      <span id="drift-skew"></span><span data-i18n="banner.driftSuffixExtension"> — TOTP codes may be rejected.</span>
+    </span>
+    <button id="drift-dismiss" class="ghost-btn" type="button" data-i18n="common.dismiss">Dismiss</button>
   </div>
   <main class="popup-shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">extension</p>
+        <p class="eyebrow" data-i18n="ext.eyebrow">extension</p>
         <h1>OTP Vault</h1>
-        <p class="subtitle">Fast codes from your toolbar.</p>
+        <p class="subtitle" data-i18n="ext.subtitle">Fast codes from your toolbar.</p>
       </div>
-      <div class="global-timer">
+      <div class="global-timer" aria-label="OTP refresh timer" data-i18n-aria-label="ext.globalTimerLabel">
         <span id="global-seconds">30s</span>
         <div class="timer-track"><div id="global-bar"></div></div>
       </div>
@@ -26,18 +29,18 @@
 
     <section class="panel compose-panel">
       <div class="section-head">
-        <h2>Add Entry</h2>
-        <button id="toggle-form" class="ghost-btn" type="button">Hide</button>
+        <h2 data-i18n="ext.addEntryHeading">Add Entry</h2>
+        <button id="toggle-form" class="ghost-btn" type="button" data-i18n="ext.hide">Hide</button>
       </div>
 
       <form id="entry-form" autocomplete="off">
-        <input id="label" type="text" placeholder="GitHub:user@example.com">
-        <input id="secret" type="text" placeholder="Base32 secret" required>
-        <input id="tags" type="text" placeholder="Tags: work, infra">
+        <input id="label" type="text" data-i18n-placeholder="ext.labelPlaceholder" placeholder="GitHub:user@example.com">
+        <input id="secret" type="text" data-i18n-placeholder="ext.secretPlaceholder" placeholder="Base32 secret" required>
+        <input id="tags" type="text" data-i18n-placeholder="ext.tagsPlaceholder" placeholder="Tags: work, infra">
         <div class="row two-up">
           <select id="entry-type">
-            <option value="totp" selected>TOTP (timed)</option>
-            <option value="hotp">HOTP (counter)</option>
+            <option value="totp" selected data-i18n="ext.totpOption">TOTP (timed)</option>
+            <option value="hotp" data-i18n="ext.hotpOption">HOTP (counter)</option>
           </select>
           <select id="algorithm">
             <option value="SHA1" selected>SHA-1</option>
@@ -48,45 +51,51 @@
         <div class="row two-up">
           <input id="counter" type="number" min="0" value="0" class="hidden">
           <select id="digits">
-            <option value="6">6 digits</option>
-            <option value="8">8 digits</option>
+            <option value="6" data-i18n="edit.digits6">6 digits</option>
+            <option value="8" data-i18n="edit.digits8">8 digits</option>
           </select>
           <input id="period" type="number" min="15" max="120" value="30">
         </div>
         <div class="row two-up import-row">
           <label class="file-btn ghost-btn">
-            <span>QR File</span>
+            <span data-i18n="ext.qrFile">QR File</span>
             <input id="qr-file" type="file" accept="image/*">
           </label>
-          <button id="paste-uri" class="ghost-btn" type="button">Paste URI</button>
-          <button id="paste-ga" class="ghost-btn" type="button">Paste GA Export</button>
+          <button id="paste-uri" class="ghost-btn" type="button" data-i18n="ext.pasteUri">Paste URI</button>
+          <button id="paste-ga" class="ghost-btn" type="button" data-i18n="ext.pasteGa">Paste GA Export</button>
         </div>
-        <button type="submit" class="primary-btn">Add Entry</button>
+        <div class="row import-row">
+          <label class="file-btn ghost-btn">
+            <span data-i18n="ext.importApps">Aegis / 2FAS</span>
+            <input id="import-app-file" type="file" accept="application/json,.json">
+          </label>
+        </div>
+        <button type="submit" class="primary-btn" data-i18n="ext.addEntry">Add Entry</button>
       </form>
     </section>
 
     <section class="panel tools-panel">
       <div class="toolbar">
-        <input id="search" type="search" placeholder="Search issuer or account">
-        <select id="sort-select" aria-label="Sort entries">
-          <option value="alpha">A-Z</option>
-          <option value="custom">Manual</option>
-          <option value="recent">Newest</option>
-          <option value="period">Fastest timer</option>
+        <input id="search" type="search" data-i18n-placeholder="ext.searchPlaceholder" placeholder="Search issuer or account">
+        <select id="sort-select" aria-label="Sort entries" data-i18n-aria-label="workspace.sortLabel">
+          <option value="alpha" data-i18n="ext.sortAz">A-Z</option>
+          <option value="custom" data-i18n="ext.sortManual">Manual</option>
+          <option value="recent" data-i18n="ext.sortNewest">Newest</option>
+          <option value="period" data-i18n="ext.sortFastest">Fastest timer</option>
         </select>
-        <button id="lock-btn" class="ghost-btn" type="button">Lock</button>
+        <button id="lock-btn" class="ghost-btn" type="button" data-i18n="ext.lock">Lock</button>
       </div>
       <p id="status" class="status" aria-live="polite"></p>
     </section>
 
     <section id="unlock-panel" class="panel hidden">
       <div class="section-head">
-        <h2>Extension Vault</h2>
+        <h2 data-i18n="unlock.extensionTitle">Extension Vault</h2>
       </div>
       <form id="unlock-form">
-        <input id="unlock-passphrase" type="password" placeholder="Passphrase to unlock encrypted storage">
-        <button id="unlock-btn" class="primary-btn" type="submit">Unlock</button>
-        <button id="biometric-unlock-btn" class="ghost-btn hidden" type="button">Unlock with biometrics</button>
+        <input id="unlock-passphrase" type="password" data-i18n-placeholder="unlock.extensionPassphrasePlaceholder" placeholder="Passphrase to unlock encrypted storage">
+        <button id="unlock-btn" class="primary-btn" type="submit" data-i18n="unlock.extensionButton">Unlock</button>
+        <button id="biometric-unlock-btn" class="ghost-btn hidden" type="button" data-i18n="unlock.biometricButton">Unlock with biometrics</button>
         <div id="unlock-passphrase-strength" class="passphrase-strength hidden">
           <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
           <span class="strength-label"></span>
@@ -98,73 +107,81 @@
 
     <section class="panel settings-panel">
       <div class="section-head">
-        <h2>Security</h2>
+        <h2 data-i18n="settings.extensionHeading">Security</h2>
       </div>
       <form id="security-form">
       <label class="toggle-row">
         <input id="encrypt-toggle" type="checkbox">
-        <span>Encrypt entries in extension storage</span>
+        <span data-i18n="settings.extensionEncryptToggle">Encrypt entries in extension storage</span>
       </label>
       <label>
-        <span>Auto-lock</span>
+        <span data-i18n="settings.autoLockLabel">Auto-lock</span>
         <select id="auto-lock-select">
-          <option value="5">After 5 minutes idle</option>
-          <option value="15" selected>After 15 minutes idle</option>
-          <option value="30">After 30 minutes idle</option>
-          <option value="0">Off</option>
+          <option value="5" data-i18n="settings.autoLock5">After 5 minutes idle</option>
+          <option value="15" selected data-i18n="settings.autoLock15">After 15 minutes idle</option>
+          <option value="30" data-i18n="settings.autoLock30">After 30 minutes idle</option>
+          <option value="0" data-i18n="settings.autoLockOffOption">Off</option>
         </select>
       </label>
       <label>
-        <span>Theme</span>
+        <span data-i18n="settings.themeLabel">Theme</span>
         <select id="theme-select">
-          <option value="system" selected>Match system</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
+          <option value="system" selected data-i18n="settings.themeSystem">Match system</option>
+          <option value="light" data-i18n="settings.themeLight">Light</option>
+          <option value="dark" data-i18n="settings.themeDark">Dark</option>
+        </select>
+      </label>
+      <label>
+        <span data-i18n="settings.languageLabel">Language</span>
+        <select id="language-select">
+          <option value="system" selected data-i18n="settings.languageSystem">Match system</option>
+          <option value="en" data-i18n="settings.languageEn">English</option>
+          <option value="vi" data-i18n="settings.languageVi">Tiếng Việt</option>
         </select>
       </label>
       <label class="toggle-row">
         <input id="time-drift-toggle" type="checkbox">
-        <span>Check device clock against server time (needs network)</span>
+        <span data-i18n="settings.driftToggle">Check device clock against server time (needs network)</span>
       </label>
-      <button id="check-drift-btn" class="ghost-btn" type="button">Check clock now</button>
-      <p class="status">Closing this popup always locks the vault immediately.</p>
+      <button id="check-drift-btn" class="ghost-btn" type="button" data-i18n="settings.checkClockNow">Check clock now</button>
+      <p class="status" data-i18n="settings.extensionClosesLocked">Closing this popup always locks the vault immediately.</p>
       <div id="passphrase-fields" class="hidden">
-        <input id="passphrase" type="password" placeholder="New passphrase">
-        <input id="passphrase-confirm" type="password" placeholder="Confirm passphrase">
+        <input id="passphrase" type="password" data-i18n-placeholder="settings.extensionPassphrasePlaceholder" placeholder="New passphrase">
+        <input id="passphrase-confirm" type="password" data-i18n-placeholder="settings.extensionPassphraseConfirmPlaceholder" placeholder="Confirm passphrase">
         <div id="set-passphrase-strength" class="passphrase-strength">
           <div class="strength-track"><div class="strength-fill" data-score="0"></div></div>
           <span class="strength-label"></span>
           <p class="strength-warnings status"></p>
         </div>
       </div>
-      <p id="passphrase-guidance" class="status hidden">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
+      <p id="passphrase-guidance" class="status hidden" data-i18n="settings.extensionPassphraseGuidance">This vault is already encrypted. Use Change Passphrase to rotate your extension secret.</p>
       <div id="biometric-settings" class="hidden">
         <p id="biometric-status-line" class="status"></p>
         <div class="security-actions">
-          <button id="enroll-biometric-btn" class="ghost-btn hidden" type="button">Enable biometric unlock</button>
-          <button id="disenroll-biometric-btn" class="ghost-btn hidden" type="button">Disable biometric unlock</button>
+          <button id="enroll-biometric-btn" class="ghost-btn hidden" type="button" data-i18n="settings.biometricEnroll">Enable biometric unlock</button>
+          <button id="disenroll-biometric-btn" class="ghost-btn hidden" type="button" data-i18n="settings.biometricDisenroll">Disable biometric unlock</button>
         </div>
       </div>
       <p id="last-export-line" class="status"></p>
       <div class="security-actions">
-        <button id="export-backup" class="ghost-btn" type="button">Export Backup</button>
-        <button id="change-passphrase-btn" class="ghost-btn hidden" type="button">Change Passphrase</button>
-        <button id="save-security" class="ghost-btn" type="submit">Save Security Settings</button>
+        <button id="export-backup" class="ghost-btn" type="button" data-i18n="settings.exportBackup">Export Backup</button>
+        <button id="change-passphrase-btn" class="ghost-btn hidden" type="button" data-i18n="settings.changePassphrase">Change Passphrase</button>
+        <button id="save-security" class="ghost-btn" type="submit" data-i18n="settings.extensionSave">Save Security Settings</button>
       </div>
       </form>
       <form id="change-passphrase-form" class="hidden change-passphrase-form">
-        <input id="current-passphrase" type="password" placeholder="Current passphrase">
-        <input id="new-passphrase" type="password" placeholder="New passphrase">
-        <input id="new-passphrase-confirm" type="password" placeholder="Confirm new passphrase">
+        <input id="current-passphrase" type="password" data-i18n-placeholder="settings.currentPassphrasePlaceholder" placeholder="Current passphrase">
+        <input id="new-passphrase" type="password" data-i18n-placeholder="settings.newPassphrasePlaceholder" placeholder="New passphrase">
+        <input id="new-passphrase-confirm" type="password" data-i18n-placeholder="settings.confirmNewPassphrasePlaceholder" placeholder="Confirm new passphrase">
         <div class="security-actions">
-          <button id="change-passphrase-submit" class="primary-btn" type="submit">Update Passphrase</button>
+          <button id="change-passphrase-submit" class="primary-btn" type="submit" data-i18n="settings.updatePassphrase">Update Passphrase</button>
         </div>
       </form>
     </section>
 
     <section class="panel history-panel">
       <div class="section-head">
-        <h2>Copy History</h2>
+        <h2 data-i18n="ext.historyHeading">Copy History</h2>
       </div>
       <div id="copy-history" class="history-list"></div>
     </section>
@@ -175,22 +192,23 @@
   <template id="entry-template">
     <article class="entry-card">
       <div class="entry-top">
-        <button class="drag-handle" type="button" aria-label="Reorder entry" title="Drag to reorder">⠿</button>
+        <button class="drag-handle" type="button" aria-label="Reorder entry" data-i18n-aria-label="entries.reorder" data-i18n-title="entries.dragToReorder">⠿</button>
         <div class="avatar"></div>
         <div class="identity">
           <h3 class="issuer"></h3>
           <p class="account"></p>
           <div class="tags"></div>
         </div>
-        <button class="icon-btn remove" type="button" title="Remove">x</button>
+        <button class="icon-btn remove" type="button" data-i18n-title="common.remove">x</button>
       </div>
 
       <div class="entry-code-row">
         <p class="code"></p>
-        <button class="ghost-btn edit" type="button">Edit</button>
-        <button class="ghost-btn move-up" type="button">Up</button>
-        <button class="ghost-btn move-down" type="button">Down</button>
-        <button class="ghost-btn copy" type="button">Copy</button>
+        <button class="ghost-btn edit" type="button" data-i18n="common.edit">Edit</button>
+        <button class="ghost-btn qr" type="button" data-i18n="entries.qr">QR</button>
+        <button class="ghost-btn move-up" type="button" data-i18n="entries.up">Up</button>
+        <button class="ghost-btn move-down" type="button" data-i18n="entries.down">Down</button>
+        <button class="ghost-btn copy" type="button" data-i18n="entries.copy">Copy</button>
       </div>
 
       <div class="entry-bottom">
@@ -214,13 +232,13 @@
   <dialog id="edit-entry-dialog" class="panel hidden-dialog">
     <form id="edit-entry-form">
     <div class="section-head">
-      <h2>Edit Entry</h2>
+      <h2 data-i18n="edit.headingShort">Edit Entry</h2>
     </div>
     <input id="edit-entry-id" type="hidden">
-    <input id="edit-label" type="text" placeholder="Label">
-    <input id="edit-secret" type="text" placeholder="Base32 secret">
-    <input id="edit-tags" type="text" placeholder="Tags">
-    <input id="edit-counter" type="number" min="0" value="0" class="hidden" placeholder="HOTP counter">
+    <input id="edit-label" type="text" data-i18n-placeholder="edit.labelField" placeholder="Label">
+    <input id="edit-secret" type="text" data-i18n-placeholder="ext.secretPlaceholder" placeholder="Base32 secret">
+    <input id="edit-tags" type="text" data-i18n-placeholder="edit.tagsField" placeholder="Tags">
+    <input id="edit-counter" type="number" min="0" value="0" class="hidden" data-i18n-placeholder="edit.counterField" placeholder="HOTP counter">
     <div class="row two-up">
       <select id="edit-algorithm">
         <option value="SHA1">SHA-1</option>
@@ -228,8 +246,8 @@
         <option value="SHA512">SHA-512</option>
       </select>
       <select id="edit-digits">
-        <option value="6">6 digits</option>
-        <option value="8">8 digits</option>
+        <option value="6" data-i18n="edit.digits6">6 digits</option>
+        <option value="8" data-i18n="edit.digits8">8 digits</option>
       </select>
     </div>
     <div class="row two-up">
@@ -237,8 +255,8 @@
     </div>
     <p id="edit-status" class="status" aria-live="polite"></p>
     <div class="row two-up">
-      <button id="cancel-edit" class="ghost-btn" type="button">Cancel</button>
-      <button id="save-edit" class="primary-btn" type="submit">Save</button>
+      <button id="cancel-edit" class="ghost-btn" type="button" data-i18n="common.cancel">Cancel</button>
+      <button id="save-edit" class="primary-btn" type="submit" data-i18n="edit.saveShort">Save</button>
     </div>
     </form>
   </dialog>
@@ -246,12 +264,12 @@
   <dialog id="confirm-remove-dialog" class="panel hidden-dialog">
     <form method="dialog">
       <div class="section-head">
-        <h2>Remove Entry</h2>
+        <h2 data-i18n="ext.removeHeading">Remove Entry</h2>
       </div>
-      <p id="confirm-remove-message" class="status">This action cannot be undone.</p>
+      <p id="confirm-remove-message" class="status" data-i18n="ext.cannotBeUndone">This action cannot be undone.</p>
       <div class="row two-up">
-        <button id="cancel-remove" class="ghost-btn" value="cancel" type="submit">Cancel</button>
-        <button id="confirm-remove" class="primary-btn" value="accept" type="submit">Remove</button>
+        <button id="cancel-remove" class="ghost-btn" value="cancel" type="submit" data-i18n="common.cancel">Cancel</button>
+        <button id="confirm-remove" class="primary-btn" value="accept" type="submit" data-i18n="common.remove">Remove</button>
       </div>
     </form>
   </dialog>
@@ -259,13 +277,30 @@
   <dialog id="migration-preview-dialog" class="panel hidden-dialog">
     <form id="migration-preview-form">
       <div class="section-head">
-        <h2>Import Google Authenticator</h2>
+        <h2 id="migration-preview-title" data-i18n="ext.importHeading">Import entries</h2>
       </div>
       <p id="migration-preview-status" class="status"></p>
       <div id="migration-preview-list"></div>
       <div class="row two-up">
-        <button id="migration-cancel" class="ghost-btn" value="cancel" type="submit">Cancel</button>
-        <button id="migration-import" class="primary-btn" value="accept" type="submit">Import</button>
+        <button id="migration-cancel" class="ghost-btn" value="cancel" type="submit" data-i18n="common.cancel">Cancel</button>
+        <button id="migration-import" class="primary-btn" value="accept" type="submit" data-i18n="common.import">Import</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="qr-export-dialog" class="panel hidden-dialog">
+    <form method="dialog">
+      <div class="section-head">
+        <h2 id="qr-export-title" data-i18n="qr.heading">Entry QR code</h2>
+      </div>
+      <p class="status" data-i18n="qr.hint">Scan with another authenticator app to move this entry. Anyone who scans this code can add your secret — keep it private.</p>
+      <div class="qr-export-wrap">
+        <canvas id="qr-export-canvas" width="220" height="220" aria-label="OTPauth QR code" data-i18n-aria-label="qr.canvasLabel"></canvas>
+      </div>
+      <p id="qr-export-status" class="status" aria-live="polite"></p>
+      <div class="row two-up">
+        <button id="qr-export-cancel" class="ghost-btn" value="cancel" type="submit" data-i18n="common.close">Close</button>
+        <button id="copy-qr-uri" class="primary-btn" type="button" data-i18n="qr.copyUri">Copy URI</button>
       </div>
     </form>
   </dialog>

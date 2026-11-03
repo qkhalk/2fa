@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Personal OTP Vault",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Popup-based TOTP manager for personal use.",
   "background": {
     "service_worker": "background.js"
@@ -27,5 +27,14 @@
   ],
   "optional_permissions": [
     "clipboardRead"
-  ]
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Open the OTP Vault popup"
+    }
+  }
 }

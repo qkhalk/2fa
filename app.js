@@ -1,5 +1,7 @@
 import jsQR from "jsqr";
+import QRCode from "qrcode";
 import {
+  buildOtpAuthUri,
   compareEntries,
   computeDropIndex,
   entryMatchesQuery,
@@ -21,6 +23,7 @@ import {
   reportError,
   toUserMessage,
 } from './lib/otp.js';
+import { MAX_IMPORT_FILE_BYTES, parseThirdPartyImport } from './lib/importers.js';
 import {
   MAX_STITCHED_ENTRIES,
   migrationToEntryCandidates,
@@ -43,6 +46,7 @@ import {
   parseBackupFile,
   shouldWarnBackup,
   unwrapDekWithPassphrase,
+  verifyBackupMac,
   wrapDekWithPassphrase,
 } from './lib/vault.js';
 import {
@@ -55,7 +59,7 @@ import {
   unwrapDek,
   wrapDek,
 } from './lib/biometric.js';
-import { t } from './lib/i18n.js';
+import { applyTranslations, resolveLocale, setLocale, t, translateStrengthAssessment } from './lib/i18n.js';
 
 // app.js
 var STORAGE_KEY = "personal_otp_vault_entries_v3";
@@ -169,6 +173,15 @@ var confirmTitle = document.getElementById("confirm-title");
 var confirmMessage = document.getElementById("confirm-message");
 var confirmAcceptBtn = document.getElementById("confirm-accept");
 var confirmCallback = null;
+var qrExportDialog = document.getElementById("qr-export-dialog");
+var qrExportCanvas = document.getElementById("qr-export-canvas");
+var qrExportTitle = document.getElementById("qr-export-title");
+var qrExportStatus = document.getElementById("qr-export-status");
+var copyQrUriBtn = document.getElementById("copy-qr-uri");
+var downloadQrBtn = document.getElementById("download-qr");
+var importAppsInput = document.getElementById("import-app-file");
+var languageSelect = document.getElementById("language-select");
+var qrExportUri = "";
 document.getElementById("debug-toggle")?.remove();
 document.getElementById("debug-panel")?.remove();
 var debugList = null;
@@ -182,6 +195,7 @@ var defaultSettings = {
   autoLockMinutes: 15,
   timeDriftCheck: false,
   theme: "system",
+  locale: "system",
   sortBy: "pinned-alpha",
   groupBy: "none"
 };
@@ -199,6 +213,7 @@ var UNDO_TOMBSTONE_TTL_MS = 10 * 60 * 1000;
 var UNDO_TOAST_MS = 10000;
 var lastActivity = Date.now();
 var operationDepth = 0;
+var lastThrottleMessage = "";
 var undoState = null; // { items: [{entry, index}], toastNode, timer }
 var cameraStream = null;
 var cameraScanTimer = null;
@@ -210,36 +225,22 @@ var debugEvents = [];
 var importPreviewState = null;
 var backupImportState = null;
 initialize();
-// Phase 7 FR7 pattern-setter: the unlock + settings areas read their strings
-// through t(). Toast/import strings stay hardcoded this release (reserved
-// keys are seeded in lib/i18n.js for a later migration).
-function applyStaticStrings() {
-  const set = (id, key) => {
-    const node = document.getElementById(id);
-    if (node) node.textContent = t(key);
-  };
-  const setPlaceholder = (id, key) => {
-    const node = document.getElementById(id);
-    if (node) node.setAttribute("placeholder", t(key));
-  };
-  set("unlock-heading", "unlock.title");
-  set("unlock-btn", "unlock.button");
-  set("export-backup", "settings.exportBackup");
-  set("change-passphrase-btn", "settings.changePassphrase");
-  set("save-settings", "settings.save");
-  setPlaceholder("unlock-passphrase", "unlock.passphrasePlaceholder");
-  setPlaceholder("vault-passphrase", "settings.passphrasePlaceholder");
-  setPlaceholder("vault-passphrase-confirm", "settings.passphraseConfirmPlaceholder");
-  const passphraseLabel = document.querySelector("#encryption-fields label:first-child span");
-  if (passphraseLabel) passphraseLabel.textContent = t("settings.passphraseLabel");
-  const confirmLabel = document.querySelector("#encryption-fields label:nth-child(2) span");
-  if (confirmLabel) confirmLabel.textContent = t("settings.passphraseConfirmLabel");
-  const guidance = document.getElementById("passphrase-guidance");
-  if (guidance) guidance.textContent = t("settings.passphraseGuidance");
+// Locale resolution + static markup translation. data-i18n attributes in the
+// HTML carry the static strings; re-run after a language change.
+function applyLocale() {
+  setLocale(resolveLocale(settings.locale));
+  applyTranslations(document);
+  // Dynamic surfaces hold translated strings in memory; re-render them so a
+  // language switch never leaves stale mixed-language text on screen.
+  renderEntries();
+  renderBulkBar();
+  renderCopyHistory();
+  updateDataSafetyBanners();
+  renderBiometricControls();
 }
 
 function initialize() {
-  applyStaticStrings();
+  applyLocale();
   syncSettingsUI();
   applyVisualSettings();
   loadVaultOnStartup();
@@ -281,6 +282,7 @@ function syncSettingsUI() {
   if (autoLockSelect) autoLockSelect.value = String(settings.autoLockMinutes);
   const themeSelect = document.getElementById("theme-select");
   if (themeSelect) themeSelect.value = settings.theme || "system";
+  if (languageSelect) languageSelect.value = settings.locale || "system";
   const timeDriftToggle = document.getElementById("time-drift-toggle");
   if (timeDriftToggle) timeDriftToggle.checked = Boolean(settings.timeDriftCheck);
   const mustUnlockOnLoad = settings.persist && settings.encrypt;
@@ -333,10 +335,10 @@ function renderBiometricControls() {
       statusLine.textContent = !biometricCapable
         ? ""
         : record
-          ? "Biometric unlock is enrolled on this device. Your passphrase remains the recovery method."
+          ? t("settings.biometricEnrolled")
           : settings.persist && settings.encrypt
-            ? "Unlock with your platform authenticator instead of your passphrase. Your passphrase stays as recovery."
-            : "Enable encrypted device storage first, then enroll biometric unlock.";
+            ? t("settings.biometricAvailable")
+            : t("settings.biometricNeedsEncryption");
     }
   }
   const unlockBiometricBtn = document.getElementById("biometric-unlock-btn");
@@ -353,9 +355,9 @@ function renderWorkspaceSummary() {
   summaryGroups.textContent = String(settings.groupBy === "none" ? 1 : Math.max(groups.length, 0));
 
   const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
-  let storageText = settings.persist ? settings.encrypt ? "Encrypted" : "Device" : "Session";
+  let storageText = settings.persist ? settings.encrypt ? t("workspace.storageEncrypted") : t("workspace.storageDevice") : t("workspace.storageSession");
   if (isLocked) {
-    storageText += " (Locked)";
+    storageText += t("workspace.storageLocked");
   }
   summaryStorage.textContent = storageText;
 }
@@ -363,7 +365,7 @@ function renderWorkspaceSummary() {
 function renderConnectionState() {
   if (!offlineChip) return;
   const online = navigator.onLine !== false;
-  offlineChip.textContent = online ? "Online" : "Offline Ready";
+  offlineChip.textContent = online ? t("workspace.online") : t("workspace.offlineReady");
   offlineChip.classList.toggle("offline", !online);
 }
 function setStatus(node, message, tone = "") {
@@ -388,11 +390,11 @@ function showToast(title, message = "", tone = "success") {
 }
 function setImportStatus(message, tone = "") {
   setStatus(importStatus, message, tone);
-  if (message) showToast(tone === "error" ? "Import" : "Vault", message, tone || "success");
+  if (message) showToast(tone === "error" ? t("toast.importTitle") : t("toast.vaultTitle"), message, tone || "success");
 }
 function setSettingsStatus(message, tone = "") {
   setStatus(settingsStatus, message, tone);
-  if (message) showToast(tone === "error" ? "Settings" : "Vault", message, tone || "success");
+  if (message) showToast(tone === "error" ? t("toast.settingsTitle") : t("toast.vaultTitle"), message, tone || "success");
 }
 function setChangePassphraseStatus(message, tone = "") {
   setStatus(changePassphraseStatus, message, tone);
@@ -402,7 +404,7 @@ function setUnlockStatus(message, tone = "") {
 }
 function renderPassphraseStrength(input, meterRoot) {
   if (!input || !meterRoot) return;
-  const assessment = assessPassphraseStrength(input.value);
+  const assessment = translateStrengthAssessment(assessPassphraseStrength(input.value));
   meterRoot.classList.toggle("hidden", input.value.length === 0);
   const fill = meterRoot.querySelector(".strength-fill");
   if (fill) fill.dataset.score = String(assessment.score);
@@ -643,7 +645,7 @@ function renderCopyHistory() {
   if (copyHistory.length === 0) {
     const empty = document.createElement("li");
     empty.className = "history-empty";
-    empty.textContent = "No copied codes yet. The last few copied OTPs appear here for quick recall.";
+    empty.textContent = t("history.empty");
     copyHistoryRoot.appendChild(empty);
   } else {
     for (const item of copyHistory) {
@@ -686,7 +688,7 @@ function renderBulkBar() {
   if (!bulkBar || !bulkSummary) return;
   const selectedCount = selectedEntryIds.size;
   bulkBar.classList.toggle("hidden", selectedCount === 0);
-  bulkSummary.textContent = `${selectedCount} selected`;
+  bulkSummary.textContent = t("workspace.selectedCount", { count: selectedCount });
 }
 
 // Restores manual-order numbers only when a decrypt path produced entries
@@ -712,7 +714,7 @@ async function consumeHotpCounter(entry, action) {
     reportError(`HOTP counter persist failed (${action})`, error);
     showToast(
       "HOTP counter",
-      "Counter save failed — the next code may repeat. Use Edit on this entry to set the counter manually.",
+      t("vault.hotpSaveFailed"),
       "error"
     );
   }
@@ -798,11 +800,11 @@ async function undoDelete(items) {
     reinserted += 1;
   }
   if (reinserted === 0) {
-    setImportStatus("Nothing to undo — those entries already exist again", "warning");
+    setImportStatus(t("import.nothingToUndo"), "warning");
     return;
   }
   await replaceEntries(nextEntries);
-  setImportStatus(`Restored ${reinserted} entr${reinserted === 1 ? "y" : "ies"}`, "success");
+  setImportStatus(reinserted === 1 ? t("import.restoredOne") : t("import.restoredMany", { count: reinserted }), "success");
 }
 
 // Shows the 10s undo toast and persists the tombstone so undo survives a
@@ -816,11 +818,11 @@ async function offerUndoDelete(items) {
   toast.className = "toast undo";
   toast.setAttribute("role", "status");
   const strong = document.createElement("strong");
-  strong.textContent = items.length === 1 ? "Entry removed" : `${items.length} entries removed`;
+  strong.textContent = items.length === 1 ? t("undo.entryRemovedOne") : t("undo.entryRemovedMany", { count: items.length });
   const undoBtn = document.createElement("button");
   undoBtn.type = "button";
   undoBtn.className = "btn small";
-  undoBtn.textContent = "Undo";
+  undoBtn.textContent = t("common.undo");
   undoBtn.addEventListener("click", () => undoDelete(items));
   toast.append(strong, undoBtn);
   toastRegion.appendChild(toast);
@@ -858,12 +860,15 @@ function renderBackupReminder() {
   if (!line) return;
   const lastBackupAt = Number(settings.lastBackupAt);
   if (!Number.isFinite(lastBackupAt) || lastBackupAt <= 0) {
-    line.textContent = "Last export: never";
+    line.textContent = t("backup.lastExportNever");
     return;
   }
   const days = Math.floor((Date.now() - lastBackupAt) / 86400000);
-  const hashSuffix = settings.lastBackupHash ? ` (checksum ${String(settings.lastBackupHash).slice(0, 8)})` : "";
-  line.textContent = `Last export: ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`}${hashSuffix}. A cancelled download cannot be detected — verify your backup file after exporting.`;
+  const exportAge = days === 0 ? t("backup.lastExportToday")
+    : days === 1 ? t("backup.lastExportOneDay")
+    : t("backup.lastExportDays", { days });
+  const checksum = settings.lastBackupHash ? t("backup.lastExportChecksum", { hash: String(settings.lastBackupHash).slice(0, 8) }) : "";
+  line.textContent = `${exportAge}${checksum}${t("backup.lastExportSuffix")}`;
 }
 function updateDataSafetyBanners() {
   renderBackupReminder();
@@ -929,7 +934,7 @@ function openEditEntryDialog(entry) {
 async function saveEditedEntry() {
   const id = editEntryIdInput.value;
   const current = entries.find((entry) => entry.id === id);
-  if (!current) throw new Error("Entry no longer exists");
+  if (!current) throw new Error(t("edit.noLongerExists"));
   const updated = normalizeEntry({
     ...current,
     label: editLabelInput.value,
@@ -942,7 +947,7 @@ async function saveEditedEntry() {
     order: current.order
   });
   if (entries.some((entry) => entry.id !== id && entryKey(entry) === entryKey(updated))) {
-    throw new Error("Another entry already uses this secret, digits, and period");
+    throw new Error(t("edit.duplicate"));
   }
   await replaceEntries(entries.map((entry) => entry.id === id ? updated : entry));
 }
@@ -1031,10 +1036,10 @@ async function endEntryDrag(event) {
   ordered.splice(Math.min(target, ordered.length), 0, moved);
   try {
     await replaceEntries(resequenceEntries(ordered));
-    setImportStatus("Manual order updated", "success");
+    setImportStatus(t("entries.manualOrderUpdated"), "success");
   } catch (error) {
     reportError("Drag reorder failed", error);
-    setImportStatus(toUserMessage(error, "Could not reorder entries"), "error");
+    setImportStatus(toUserMessage(error, t("vault.reorderFailed")), "error");
   }
 }
 function addCopyHistory(label, code) {
@@ -1055,32 +1060,32 @@ function openAddDialog(tab) {
     if (radio) radio.checked = true;
   }
 }
-function showEmptyState(message, heading = "Vault ready for the first import") {
+function showEmptyState(message, heading = t("empty.heading")) {
   entriesRoot.innerHTML = "";
   entriesRoot.innerHTML = `
     <section class="workspace-empty">
       <div class="workspace-empty-copy">
-        <p class="empty-kicker">vault</p>
+        <p class="empty-kicker">${t("empty.kicker")}</p>
         <h3>${heading}</h3>
         <p>${message}</p>
         <div class="workspace-empty-actions">
-          <button type="button" class="btn primary" data-empty-action="focus-secret">Add your first entry</button>
-          <button type="button" class="btn ghost" data-empty-action="focus-uri">Paste a URI</button>
-          <button type="button" class="btn ghost" data-empty-action="start-camera">Scan a QR code</button>
+          <button type="button" class="btn primary" data-empty-action="focus-secret">${t("empty.addFirst")}</button>
+          <button type="button" class="btn ghost" data-empty-action="focus-uri">${t("empty.pasteUri")}</button>
+          <button type="button" class="btn ghost" data-empty-action="start-camera">${t("empty.scanQr")}</button>
         </div>
       </div>
       <div class="workspace-empty-guide">
         <div class="preview-item">
-          <strong>1. Import or type</strong>
-          <p>Use Base32, URI, clipboard, QR image, or camera.</p>
+          <strong>${t("empty.step1Title")}</strong>
+          <p>${t("empty.step1Text")}</p>
         </div>
         <div class="preview-item">
-          <strong>2. Review and tag</strong>
-          <p>Catch duplicates early and keep the vault organized by project or device.</p>
+          <strong>${t("empty.step2Title")}</strong>
+          <p>${t("empty.step2Text")}</p>
         </div>
         <div class="preview-item">
-          <strong>3. Protect this device</strong>
-          <p>Enable persistence only when needed, then add encryption and backups.</p>
+          <strong>${t("empty.step3Title")}</strong>
+          <p>${t("empty.step3Text")}</p>
         </div>
       </div>
     </section>`;
@@ -1127,6 +1132,10 @@ function createEntryNode(entry) {
   avatar.textContent = getIssuerInitials(entry.label);
   refreshEntryMetadata(node, entry);
   renderTagRow(node, entry);
+  const qrBtn = node.querySelector(".qr");
+  if (qrBtn) {
+    qrBtn.onclick = () => openQrExport(entry);
+  }
   copyBtn.onclick = async () => {
     try {
       const latestCode = node.dataset.otp;
@@ -1135,19 +1144,19 @@ function createEntryNode(entry) {
       // Progressive enhancement: silent no-op where unsupported (iOS Safari).
       navigator.vibrate?.(20);
       addCopyHistory(entry.label, latestCode);
-      copyBtn.textContent = "Copied";
+      copyBtn.textContent = t("entries.copied");
       if (settings.clearClipboard) {
         setTimeout(() => {
           navigator.clipboard.writeText("").catch((error) => reportError("Clipboard clear failed", error));
         }, 3e4);
       }
       setTimeout(() => {
-        copyBtn.textContent = "Copy";
+        copyBtn.textContent = t("entries.copy");
       }, 1e3);
       await consumeHotpCounter(entry, "copy");
     } catch (error) {
       reportError("Copy failed", error);
-      showToast("Vault", toUserMessage(error, "Could not copy OTP to clipboard"), "error");
+      showToast(t("toast.vaultTitle"), toUserMessage(error, t("vault.copyFailedShort")), "error");
     }
   };
 
@@ -1161,10 +1170,10 @@ function createEntryNode(entry) {
       sortSelect.value = "custom";
       saveSettings();
       await moveEntry(entry.id, -1);
-      setImportStatus("Manual order updated", "success");
+      setImportStatus(t("entries.manualOrderUpdated"), "success");
     } catch (error) {
       reportError("Move up failed", error);
-      setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
+      setImportStatus(toUserMessage(error, t("vault.reorderEntryFailed")), "error");
     }
   };
 
@@ -1174,16 +1183,16 @@ function createEntryNode(entry) {
       sortSelect.value = "custom";
       saveSettings();
       await moveEntry(entry.id, 1);
-      setImportStatus("Manual order updated", "success");
+      setImportStatus(t("entries.manualOrderUpdated"), "success");
     } catch (error) {
       reportError("Move down failed", error);
-      setImportStatus(toUserMessage(error, "Could not reorder entry"), "error");
+      setImportStatus(toUserMessage(error, t("vault.reorderEntryFailed")), "error");
     }
   };
   revealBtn.onclick = async () => {
     node.classList.toggle("revealed");
     const revealed = node.classList.contains("revealed");
-    revealBtn.textContent = revealed ? "Hide" : "Reveal";
+    revealBtn.textContent = revealed ? t("entries.hide") : t("entries.reveal");
     // Revealing an HOTP code consumes it: advance the persisted counter.
     if (revealed && entry.type === "hotp") {
       await consumeHotpCounter(entry, "reveal");
@@ -1192,17 +1201,17 @@ function createEntryNode(entry) {
   pinBtn.onclick = async () => {
     try {
       await replaceEntries(entries.map((item) => item.id === entry.id ? { ...item, pinned: !item.pinned } : item));
-      setImportStatus("Entry order updated", "success");
+      setImportStatus(t("entries.pinToggled"), "success");
     } catch (error) {
       reportError("Pin toggle failed", error);
-      setImportStatus(toUserMessage(error, "Could not update entry order"), "error");
+      setImportStatus(toUserMessage(error, t("vault.pinFailed")), "error");
     }
   };
   removeBtn.onclick = async () => {
     try {
       const confirmed = await showConfirmDialog(
-        "Remove this entry?",
-        `This will remove "${entry.label}" from your vault. You can undo for 10 seconds.`
+        t("confirm.removeTitle"),
+        t("confirm.removeText", { label: entry.label })
       );
       if (!confirmed) return;
       const index = entries.findIndex((item) => item.id === entry.id);
@@ -1210,11 +1219,11 @@ function createEntryNode(entry) {
       await replaceEntries(nextEntries);
       selectedEntryIds.delete(entry.id);
       renderBulkBar();
-      setImportStatus("Entry removed", "success");
+      setImportStatus(t("entries.removed"), "success");
       if (index >= 0) await offerUndoDelete([{ entry, index }]);
     } catch (error) {
       reportError("Entry removal failed", error);
-      setImportStatus(toUserMessage(error, "Could not remove entry"), "error");
+      setImportStatus(toUserMessage(error, t("vault.removeFailed")), "error");
     }
   };
   if (selectBox) {
@@ -1230,7 +1239,7 @@ function refreshEntryMetadata(node, entry) {
   const parts = parseLabelParts(entry.label);
   node.querySelector(".entry-label").textContent = parts.issuer;
   node.querySelector(".entry-account").textContent = parts.account;
-  node.querySelector(".entry-meta").textContent = `${entry.digits} digits \u2022 ${entry.period}s`;
+  node.querySelector(".entry-meta").textContent = t("entries.meta", { digits: entry.digits, period: entry.period });
   const algoBadge = node.querySelector(".entry-algo");
   if (algoBadge) {
     const showAlgo = entry.algorithm && entry.algorithm !== "SHA1";
@@ -1251,20 +1260,20 @@ function renderEntries() {
   renderConnectionState();
   const isLocked = !unlockPanel.classList.contains("hidden") && settings.encrypt;
   if (workspaceHeading) {
-    workspaceHeading.textContent = isLocked ? "Vault Locked" : "Current Codes";
+    workspaceHeading.textContent = isLocked ? t("entries.headingLocked") : t("entries.headingCurrent");
   }
   if (isLocked) {
-    showEmptyState("Vault is locked. Unlock to view your codes.");
+    showEmptyState(t("empty.locked"));
     return;
   }
   if (entries.length === 0) {
     entryNodes.clear();
-    showEmptyState("No entries yet. Import a URI, scan a QR, or add one manually.");
+    showEmptyState(t("empty.noEntries"));
     return;
   }
   const groups = getEntryGroups();
   if (groups.length === 0 || groups.every(([, groupEntries]) => groupEntries.length === 0)) {
-    showEmptyState("Adjust the search or clear the filter to see your entries.", "No matching entries");
+    showEmptyState(t("empty.noMatch"), t("empty.headingNoMatch"));
     return;
   }
   entriesRoot.innerHTML = "";
@@ -1276,7 +1285,9 @@ function renderEntries() {
     if (settings.groupBy !== "none") {
       const title = document.createElement("p");
       title.className = "entry-group-title";
-      title.textContent = groupName;
+      title.textContent = groupName === "All Entries" ? t("entries.groupAll")
+        : groupName === "Untagged" ? t("entries.groupUntagged")
+        : groupName;
       wrapper.appendChild(title);
     }
     for (const entry of groupEntries) {
@@ -1291,7 +1302,7 @@ function renderEntries() {
       const dragHandle = node.querySelector(".drag-handle");
       if (dragHandle) dragHandle.classList.toggle("hidden", settings.sortBy !== "custom");
       node.classList.toggle("pinned", entry.pinned);
-      node.querySelector(".pin").textContent = entry.pinned ? "Unpin" : "Pin";
+      node.querySelector(".pin").textContent = entry.pinned ? t("entries.unpin") : t("entries.pin");
       const selectBox = node.querySelector(".entry-select");
       if (selectBox) selectBox.checked = selectedEntryIds.has(entry.id);
       wrapper.appendChild(node);
@@ -1316,7 +1327,7 @@ async function updateEntryNode(entry, now) {
     if (entry.type === "hotp") {
       // HOTP renders the deterministic code for the persisted counter —
       // no rolling timer; the counter advances only on reveal/copy (FR8).
-      seconds.textContent = `counter #${entry.counter}`;
+      seconds.textContent = t("entries.counterLeft", { counter: entry.counter });
       bar.style.transform = "scaleX(1)";
       node.classList.toggle("urgent", false);
       // Style-only write, O(1) per card per tick (NFR3).
@@ -1324,7 +1335,7 @@ async function updateEntryNode(entry, now) {
       otp = await generateHotp(entry.secret, entry.counter, entry.digits, entry.algorithm);
     } else {
       const remaining = entry.period - now % entry.period;
-      seconds.textContent = `${remaining}s left`;
+      seconds.textContent = t("entries.secondsLeft", { seconds: remaining });
       bar.style.transform = `scaleX(${remaining / entry.period})`;
       node.classList.toggle("urgent", remaining <= 10);
       if (ring) ring.style.strokeDashoffset = String(100 - (remaining / entry.period) * 100);
@@ -1335,7 +1346,7 @@ async function updateEntryNode(entry, now) {
     copyBtn.disabled = false;
   } catch (error) {
     reportError("OTP generation failed", error);
-    code.textContent = "Invalid secret";
+    code.textContent = t("entries.invalidSecret");
     node.dataset.otp = "";
     copyBtn.disabled = true;
   }
@@ -1366,8 +1377,9 @@ async function tick() {
     const remainingMs = guard.lockedUntil - Date.now();
     unlockBtn.disabled = remainingMs > 0;
     if (remainingMs > 0) {
-      setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil(remainingMs / 1000)}s`, "error");
-    } else if (unlockStatus.classList.contains("error") && unlockStatus.textContent.startsWith("Too many failed attempts")) {
+      lastThrottleMessage = t("vault.tooManyAttempts", { seconds: Math.ceil(remainingMs / 1000) });
+      setUnlockStatus(lastThrottleMessage, "error");
+    } else if (unlockStatus.classList.contains("error") && unlockStatus.textContent === lastThrottleMessage) {
       setUnlockStatus("");
     }
     return;
@@ -1457,12 +1469,12 @@ function reconcileOrphanedBiometricRecord() {
 async function requirePassphrase(actionLabel) {
   if (currentPassphrase) return currentPassphrase;
   if (!heldDek) return "";
-  const candidate = window.prompt(`Enter your vault passphrase to ${actionLabel}:`);
-  if (!candidate) throw new Error("Vault passphrase required for this action");
+  const candidate = window.prompt(t("vault.passphrasePrompt", { action: actionLabel }));
+  if (!candidate) throw new Error(t("vault.passphraseRequired"));
   const normalized = normalizePassphrase(candidate);
   const payload = await readEncryptedVaultPayload();
   if (!payload || !isDekEncryptedPayload(payload)) {
-    throw new Error("Vault passphrase required for this action");
+    throw new Error(t("vault.passphraseRequired"));
   }
   heldDek = await unwrapDekWithPassphrase(payload, normalized);
   dekEnvelopeMeta = extractDekEnvelopeMeta(payload);
@@ -1474,7 +1486,7 @@ function releasePassphrase(previousPassphrase) {
 }
 async function persistEntries() {
   if (staleVaultTab) {
-    throw new Error("Vault changed in another tab — reload this tab to make changes");
+    throw new Error(t("vault.staleTab"));
   }
   const previousArtifacts = snapshotPersistedVaultArtifacts();
   try {
@@ -1490,7 +1502,7 @@ async function persistEntries() {
         localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(envelope));
       } else {
         if (!currentPassphrase) {
-          throw new Error("Unlock or set a passphrase before saving encrypted entries");
+          throw new Error(t("vault.needsUnlockToSave"));
         }
         await saveEncryptedEntries(entries, currentPassphrase);
       }
@@ -1567,9 +1579,9 @@ function buildPreviewCandidatesFromUris(uris, sourceLabel) {
 
   if (unique.length === 0) {
     const details = [];
-    if (skipped > 0) details.push(`${skipped} duplicate${skipped === 1 ? "" : "s"} skipped`);
-    if (invalid > 0) details.push(`${invalid} invalid URI${invalid === 1 ? "" : "s"} ignored`);
-    throw new Error(`No new entries found from ${sourceLabel}${details.length > 0 ? ` (${details.join(", ")})` : ""}`);
+    if (skipped > 0) details.push(t("vault.duplicatesSkipped", { count: skipped, plural: skipped === 1 ? "" : "s" }));
+    if (invalid > 0) details.push(t("vault.invalidIgnored", { count: invalid, plural: invalid === 1 ? "" : "s" }));
+    throw new Error(t("vault.noNewEntries", { source: sourceLabel, details: details.length > 0 ? ` (${details.join(", ")})` : "" }));
   }
   return { candidates: unique, skipped, invalid, sourceLabel };
 }
@@ -1601,7 +1613,7 @@ function stageMigrationPayloads(payloadByteArrays, sourceLabel) {
   const stitched = stitchMigrationBatches(payloadByteArrays);
   const warnings = [...stitched.warnings];
   if (stitched.entries.length === 0) {
-    throw new Error(`No importable entries found in the ${sourceLabel} export${warnings.length ? `: ${warnings.join(" ")}` : ""}`);
+    throw new Error(t("vault.noImportable", { source: sourceLabel, details: warnings.length ? `: ${warnings.join(" ")}` : "" }));
   }
 
   const candidates = [];
@@ -1649,11 +1661,11 @@ function handleMigrationScanFrame(uri) {
     }
     const payloadKey = `${parsed.batch.id}:${parsed.batch.index}`;
     if (migrationScanState.seenKeys.has(payloadKey)) {
-      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+      setImportStatus(t("import.scanProgress", { done: migrationScanState.seenKeys.size, total: migrationScanState.total }), "warning");
       return;
     }
     if (migrationScanState.total !== null && parsed.batch.size !== migrationScanState.total) {
-      setImportStatus("QR codes from different exports detected — restart the scan with one export.", "error");
+      setImportStatus(t("import.scanMixedBatches"), "error");
       migrationScanState = null;
       return;
     }
@@ -1661,10 +1673,10 @@ function handleMigrationScanFrame(uri) {
     migrationScanState.seenKeys.add(payloadKey);
     migrationScanState.payloads.push(parsed.payloadBytes);
     if (migrationScanState.seenKeys.size >= migrationScanState.total) {
-      setImportStatus("All QR codes scanned.", "success");
+      setImportStatus(t("import.scanComplete"), "success");
       finishMigrationCameraScan();
     } else {
-      setImportStatus(`Scanned ${migrationScanState.seenKeys.size} of ${migrationScanState.total} QR codes...`, "warning");
+      setImportStatus(t("import.scanProgress", { done: migrationScanState.seenKeys.size, total: migrationScanState.total }), "warning");
     }
   } catch (error) {
     reportError("Migration scan failed", error);
@@ -1681,13 +1693,13 @@ function renderImportPreview() {
   const warnings = importPreviewState.warnings || [];
   const sourceLabel = importPreviewState.sourceLabel || "Import";
 
-  importPreviewTitle.textContent = `Review ${candidates.length} candidate${candidates.length === 1 ? "" : "s"}`;
-  let statusText = `${sourceLabel}: only valid, non-duplicate entries are shown below.`;
+  importPreviewTitle.textContent = t("import.previewTitle", { count: candidates.length, plural: candidates.length === 1 ? "" : "s" });
+  let statusText = t("import.previewStatus", { source: sourceLabel });
   if (skipped > 0) {
-    statusText += ` Skipped ${skipped} duplicate${skipped === 1 ? "" : "s"}.`;
+    statusText += t("import.previewSkipped", { count: skipped, plural: skipped === 1 ? "" : "s" });
   }
   if (invalid > 0) {
-    statusText += ` Ignored ${invalid} invalid entr${invalid === 1 ? "y" : "ies"}.`;
+    statusText += t("import.previewInvalid", { count: invalid, plural: invalid === 1 ? "y" : "ies" });
   }
   if (warnings.length > 0) {
     statusText += ` ${warnings.join(" ")}`;
@@ -1707,12 +1719,12 @@ function renderImportPreview() {
     includeInput.className = "preview-include";
     includeInput.checked = !entry.duplicateHint;
     const includeText = document.createElement("span");
-    includeText.textContent = entry.duplicateHint ? "Already in vault" : "Import this entry";
+    includeText.textContent = entry.duplicateHint ? t("import.alreadyInVault") : t("import.includeEntry");
     includeLabel.append(includeInput, includeText);
 
     const labelField = document.createElement("label");
     const labelText = document.createElement("span");
-    labelText.textContent = "Label";
+    labelText.textContent = t("import.previewLabelField");
     const labelInput = document.createElement("input");
     labelInput.type = "text";
     labelInput.className = "preview-label";
@@ -1721,12 +1733,12 @@ function renderImportPreview() {
 
     const tagsField = document.createElement("label");
     const tagsText = document.createElement("span");
-    tagsText.textContent = "Tags";
+    tagsText.textContent = t("import.previewTagsField");
     const tagsInput = document.createElement("input");
     tagsInput.type = "text";
     tagsInput.className = "preview-tags";
     tagsInput.value = (entry.tags || []).join(", ");
-    tagsInput.placeholder = "project, hardware-key";
+    tagsInput.placeholder = t("import.previewTagsPlaceholder");
     tagsField.append(tagsText, tagsInput);
 
     const summary = document.createElement("p");
@@ -1770,17 +1782,19 @@ async function commitImportPreview(previewState = importPreviewState) {
       order: nextOrder++,
     }];
   });
-  if (enriched.length === 0) throw new Error("Select at least one entry to import");
+  if (enriched.length === 0) throw new Error(t("import.selectAtLeastOne"));
   await replaceEntries([...entries, ...enriched]);
-  setImportStatus(`${sourceLabel}: imported ${enriched.length} entr${enriched.length === 1 ? "y" : "ies"}`, "success");
+  setImportStatus(enriched.length === 1
+    ? t("import.importedOne", { source: sourceLabel })
+    : t("import.importedMany", { source: sourceLabel, count: enriched.length }), "success");
 }
 async function importOtpAuthUri(otpUri, sourceLabel = "Import") {
   const parsed = normalizeEntry({ ...parseOtpAuthUri(otpUri), order: nextOrderValueFrom(entries) });
   if (hasDuplicateEntry(entries, parsed)) {
-    throw new Error("This account already exists");
+    throw new Error(t("vault.accountExists"));
   }
   await replaceEntries([...entries, parsed]);
-  setImportStatus(`${sourceLabel}: account imported`, "success");
+  setImportStatus(t("import.uriImported", { source: sourceLabel }), "success");
 }
 async function decodeQrFromBlob(blob) {
   if (typeof jsQR !== "function") {
@@ -1796,7 +1810,7 @@ async function decodeQrFromBlob(blob) {
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
   if (!result?.data) {
-    throw new Error("Could not detect a QR code in that image");
+    throw new Error(t("import.qrNotDetectedImage"));
   }
   return result.data;
 }
@@ -1812,7 +1826,7 @@ async function importFromQrBlob(blob, sourceLabel) {
     throw new Error(migration.warnings.join(" "));
   }
   const uris = extractOtpAuthUris(qrText);
-  if (uris.length === 0) throw new Error("QR code was detected but does not contain a valid OTP URI");
+  if (uris.length === 0) throw new Error(t("import.noValidOtpUriInQr"));
   const candidates = buildPreviewCandidatesFromUris(uris, sourceLabel);
   openImportPreview(candidates, sourceLabel);
 }
@@ -1845,18 +1859,18 @@ async function unlockVault(passphrase) {
 async function unlockWithBiometrics() {
   const guard = readUnlockGuard();
   if (guard.lockedUntil > Date.now()) {
-    setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - Date.now()) / 1000)}s`, "error");
+    setUnlockStatus(t("vault.tooManyAttempts", { seconds: Math.ceil((guard.lockedUntil - Date.now()) / 1000) }), "error");
     return;
   }
   const record = readBiometricRecord();
   if (!record) {
-    setUnlockStatus("No biometric unlock is enrolled on this device", "error");
+    setUnlockStatus(t("ext.noBiometricEnrolled"), "error");
     return;
   }
   const payload = await readEncryptedVaultPayload();
   if (!payload || !isDekEncryptedPayload(payload)) {
     reconcileOrphanedBiometricRecord();
-    setUnlockStatus("Biometric unlock is no longer available — use your passphrase", "error");
+    setUnlockStatus(t("ext.biometricUnavailable"), "error");
     return;
   }
   operationDepth += 1;
@@ -1875,10 +1889,10 @@ async function unlockWithBiometrics() {
     renderEntries();
     await tick();
     await offerUndoFromTombstone();
-    setUnlockStatus("Vault unlocked with biometrics", "success");
+    setUnlockStatus(t("unlock.statusBiometricSuccess"), "success");
   } catch (error) {
     reportError("Biometric unlock failed", error);
-    setUnlockStatus(toUserMessage(error, "Biometric unlock failed — use your passphrase"), "error");
+    setUnlockStatus(toUserMessage(error, t("ext.biometricUnlockFailed")), "error");
   } finally {
     operationDepth -= 1;
   }
@@ -1888,14 +1902,14 @@ async function unlockWithBiometrics() {
 // DEK, data, and passphrase wrap untouched and swaps only the KEK copy.
 async function enrollVaultBiometrics() {
   if (!settings.persist || !settings.encrypt) {
-    throw new Error("Enable encrypted device storage before enabling biometric unlock");
+    throw new Error(t("settings.enabledEncryptedFirst"));
   }
   if (!currentPassphrase && !heldDek) {
-    throw new Error("Unlock the vault before enabling biometric unlock");
+    throw new Error(t("settings.unlockBeforeBiometric"));
   }
   const payload = await readEncryptedVaultPayload();
   if (payload && !isDekEncryptedPayload(payload) && !currentPassphrase) {
-    throw new Error("Unlock the vault before enabling biometric unlock");
+    throw new Error(t("settings.unlockBeforeBiometric"));
   }
   const enrollment = await enrollBiometricUnlock({});
   const prfSalt = enrollment.prfSalt;
@@ -1941,23 +1955,23 @@ async function enrollVaultBiometrics() {
 async function disenrollVaultBiometrics() {
   const record = readBiometricRecord();
   if (!record) {
-    setSettingsStatus("Biometric unlock is not enabled", "error");
+    setSettingsStatus(t("settings.biometricNotEnabled"), "error");
     return;
   }
   const confirmed = await showConfirmDialog(
-    "Disable biometric unlock?",
-    "The vault returns to passphrase-only storage. Your passphrase will be required to unlock from now on."
+    t("settings.biometricDisableTitle"),
+    t("settings.biometricDisableText")
   );
   if (!confirmed) return;
   const previousPassphrase = currentPassphrase;
-  await requirePassphrase("disable biometric unlock");
+  await requirePassphrase(t("settings.biometricDisablePromptAction"));
   try {
     const restored = await encryptEntries(entries, currentPassphrase);
     localStorage.setItem(ENCRYPTED_VAULT_KEY, JSON.stringify(restored));
     removeBiometricRecord();
     heldDek = null;
     dekEnvelopeMeta = null;
-    setSettingsStatus("Biometric unlock disabled — passphrase-only vault restored", "success");
+    setSettingsStatus(t("settings.biometricDisabled"), "success");
   } finally {
     releasePassphrase(previousPassphrase);
   }
@@ -1985,7 +1999,7 @@ async function handleSaveSettings() {
   if (persistToggle.checked && encryptToggle.checked) {
     const needsInitialPassphrase = !settings.encrypt || !settings.persist || (!currentPassphrase && !heldDek);
     if (needsInitialPassphrase && !vaultPassphraseInput.value.trim()) {
-      throw new Error("Enter a passphrase to enable encryption");
+      throw new Error(t("vault.needsPassphraseToEncrypt"));
     }
   }
   if (persistToggle.checked && !hasSeenPersistWarning()) {
@@ -2004,6 +2018,7 @@ async function handleSaveSettings() {
     autoLockMinutes: Number(document.getElementById("auto-lock-select")?.value ?? settings.autoLockMinutes) || 0,
     timeDriftCheck: document.getElementById("time-drift-toggle")?.checked ?? settings.timeDriftCheck,
     theme: document.getElementById("theme-select")?.value ?? settings.theme ?? "system",
+    locale: languageSelect?.value ?? settings.locale ?? "system",
     sortBy: sortSelect.value,
     groupBy: groupSelect.value
   };
@@ -2013,14 +2028,14 @@ async function handleSaveSettings() {
     const second = vaultPassphraseConfirmInput.value.trim();
     const needsInitialPassphrase = !settings.encrypt || !settings.persist || (!currentPassphrase && !heldDek);
     if (needsInitialPassphrase && !first) {
-      throw new Error("Enter a passphrase to enable encryption");
+      throw new Error(t("vault.needsPassphraseToEncrypt"));
     }
     if (needsInitialPassphrase || first || second) {
       if (settings.encrypt && settings.persist && currentPassphrase && (first || second)) {
         nextPassphrase = currentPassphrase;
       } else {
         if (first !== second) {
-          throw new Error("Passphrase confirmation does not match");
+          throw new Error(t("vault.confirmationMismatch"));
         }
         nextPassphrase = normalizePassphrase(first);
       }
@@ -2035,6 +2050,7 @@ async function handleSaveSettings() {
   currentPassphrase = nextPassphrase;
   syncSettingsUI();
   applyVisualSettings();
+  applyLocale();
   try {
     saveSettings();
     if (!settings.persist) {
@@ -2058,6 +2074,7 @@ async function handleSaveSettings() {
     }
     syncSettingsUI();
     applyVisualSettings();
+    applyLocale();
     throw error;
   }
   setLocked(false);
@@ -2081,16 +2098,16 @@ function downloadJson(filename, data) {
 async function exportBackup() {
   const previousPassphrase = currentPassphrase;
   // FR12 gate. FR10: the passphrase path below always emits a standard
-  // Phase-1 envelope (no `dek` block), restorable by passphrase alone.
-  await requirePassphrase("export a backup");
+  // envelope (no `dek` block), restorable by passphrase alone.
+  await requirePassphrase(t("vault.actionExportBackup"));
   try {
     let envelope;
     if (settings.encrypt) {
       if (!currentPassphrase) {
-        throw new Error("Unlock the vault before exporting encrypted backup");
+        throw new Error(t("vault.needsUnlockToExport"));
       }
       const encryptedPayload = await encryptEntries(entries, currentPassphrase);
-      envelope = await createEncryptedBackup(encryptedPayload);
+      envelope = await createEncryptedBackup(encryptedPayload, currentPassphrase);
     } else {
       envelope = await createPlainBackup(entries);
     }
@@ -2111,19 +2128,19 @@ async function stampBackupExport(envelope) {
 }
 async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseCandidate, confirmPassphraseCandidate) {
   if (!settings.persist || !settings.encrypt) {
-    throw new Error("Enable encrypted device storage before changing the vault passphrase");
+    throw new Error(t("vault.changeNeedsEncryption"));
   }
   const previousPassphrase = currentPassphrase;
   if (!previousPassphrase) {
-    await requirePassphrase("change the vault passphrase");
+    await requirePassphrase(t("vault.actionChangePassphrase"));
   }
   if (currentPassphraseCandidate !== currentPassphrase) {
     releasePassphrase(previousPassphrase);
-    throw new Error("Current passphrase is incorrect");
+    throw new Error(t("vault.currentIncorrect"));
   }
   if (nextPassphraseCandidate !== confirmPassphraseCandidate) {
     releasePassphrase(previousPassphrase);
-    throw new Error("Passphrase confirmation does not match");
+    throw new Error(t("vault.confirmationMismatch"));
   }
   const normalizedNextPassphrase = normalizePassphrase(nextPassphraseCandidate);
   const payload = await readEncryptedVaultPayload();
@@ -2153,6 +2170,7 @@ async function changeVaultPassphrase(currentPassphraseCandidate, nextPassphraseC
   }
   releasePassphrase(previousPassphrase);
 }
+
 function renderBackupReview(backup) {
   if (!backupReviewSummary) return;
   backupReviewSummary.innerHTML = "";
@@ -2161,16 +2179,18 @@ function renderBackupReview(backup) {
   const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
 
   let summaryItems = [
-    `Integrity: ${backup.integrity === "verified" ? "verified checksum" : "legacy backup"}`,
-    `Encrypted: ${backup.encrypted ? "yes" : "no"}`,
-    `Schema: v${backup.schemaVersion}`,
-    `Created: ${backup.createdAt || "unknown"}`,
-    `Incoming items: ${backup.itemCount}`,
-    `Current vault size: ${entries.length}`
+    backup.integrity === "verified"
+      ? (backup.macProtected ? t("backup.integrityVerifiedKeyed") : t("backup.integrityVerified"))
+      : t("backup.integrityLegacy"),
+    backup.encrypted ? t("backup.encryptedYes") : t("backup.encryptedNo"),
+    t("backup.schemaLine", { version: backup.schemaVersion }),
+    t("backup.createdLine", { date: backup.createdAt || "unknown" }),
+    t("backup.incomingItems", { count: backup.itemCount }),
+    t("backup.vaultSize", { count: entries.length })
   ];
 
   if (backup.invalidItemCount > 0) {
-    summaryItems.push(`Review: ${backup.invalidItemCount} invalid item${backup.invalidItemCount === 1 ? "" : "s"} skipped before import`);
+    summaryItems.push(t("backup.invalidSkipped", { count: backup.invalidItemCount, plural: backup.invalidItemCount === 1 ? "" : "s" }));
   }
 
   if (mode === "merge" && backupEntries.length > 0 && entries.length > 0) {
@@ -2178,7 +2198,7 @@ function renderBackupReview(backup) {
       entries.some((entry) => entryKey(entry) === entryKey(candidate))
     ).length;
     const newEntries = backupEntries.length - duplicates;
-    summaryItems.push(`Merge: ${newEntries} new, ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped`);
+    summaryItems.push(t("backup.mergeSummary", { new: newEntries, duplicates, plural: duplicates === 1 ? "" : "s" }));
   }
 
   summaryItems.forEach((item) => {
@@ -2188,39 +2208,53 @@ function renderBackupReview(backup) {
     backupReviewSummary.appendChild(row);
   });
   backupPassphraseRow?.classList.toggle("hidden", !backup.encrypted);
+  // An encrypted backup without a keyed mac (v2 or earlier) imports, but the
+  // version field inside the unkeyed-checksum region is downgradable, so the
+  // missing authenticity signal is surfaced as a warning, not success.
+  const verified = backup.integrity === "verified";
+  const unkeyedEncrypted = verified && backup.encrypted && !backup.macProtected;
   setStatus(
     backupReviewStatus,
-    backup.integrity === "verified" ? "Backup checksum verified. Choose merge to keep existing entries or replace to overwrite the vault." : "Legacy backup detected. Import is supported, but integrity could not be verified.",
-    backup.integrity === "verified" ? "success" : "warning"
+    !verified ? t("backup.reviewLegacy")
+      : unkeyedEncrypted ? t("backup.reviewNoMac")
+      : backup.macProtected ? t("backup.reviewVerifiedKeyed")
+      : t("backup.reviewVerified"),
+    verified && !unkeyedEncrypted ? "success" : "warning"
   );
 }
-async function importBackupFile(file, backup = null) {
+async function importBackupFile(file, backup = null, rawBackup = null) {
   const previousPassphrase = currentPassphrase;
   // FR12: modifying the vault under a biometric-only session requires one
   // passphrase re-entry, released after the import settles.
   await requirePassphrase("import a backup");
   try {
+    let inlineRawBackup = rawBackup;
     const resolvedBackup = backup || await (async () => {
       const text = await file.text();
-      let rawBackup;
+      let parsed;
       try {
-        rawBackup = JSON.parse(text);
+        parsed = JSON.parse(text);
       } catch (error) {
-        throw new Error("Backup file is not valid JSON");
+        throw new Error(t("backup.fileNotJson"));
       }
+      inlineRawBackup = parsed;
       try {
-        return await parseBackupFile(rawBackup);
+        return await parseBackupFile(parsed);
       } catch (error) {
         throw new Error(toUserMessage(error, "Backup file is invalid"));
       }
     })();
     if (resolvedBackup.integrity === "legacy") {
-      setSettingsStatus("Legacy backup detected. Importing without checksum verification.", "warning");
+      setSettingsStatus(t("backup.legacyStatus"), "warning");
     }
     const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
     if (resolvedBackup.encrypted) {
-      const passphrase = backupImportPassphraseInput?.value.trim() || window.prompt("Backup is encrypted. Enter the backup passphrase:");
-      if (!passphrase) throw new Error("Backup import cancelled");
+      const passphrase = backupImportPassphraseInput?.value.trim() || window.prompt(t("backup.passphrasePrompt"));
+      if (!passphrase) throw new Error(t("backup.importCancelledNoPassphrase"));
+      if (resolvedBackup.macProtected) {
+        const authentic = await verifyBackupMac(inlineRawBackup, passphrase);
+        if (!authentic) throw new Error(t("backup.macFailed"));
+      }
       const decrypted = await decryptVaultEntries(resolvedBackup.vault, passphrase);
       const nextEntries2 = mode === "replace" ? decrypted : [...entries, ...decrypted.filter((candidate) => !entries.some((entry) => entryKey(entry) === entryKey(candidate)))];
       await replaceEntries(nextEntries2);
@@ -2238,7 +2272,7 @@ async function stageBackupImport(file) {
   try {
     rawBackup = JSON.parse(text);
   } catch (error) {
-    throw new Error("Backup file is not valid JSON");
+    throw new Error(t("backup.fileNotJson"));
   }
   let backup;
   try {
@@ -2246,7 +2280,7 @@ async function stageBackupImport(file) {
   } catch (error) {
     throw new Error(toUserMessage(error, "Backup file is invalid"));
   }
-  backupImportState = { file, backup };
+  backupImportState = { file, backup, rawBackup };
   if (backupImportMode) backupImportMode.value = entries.length > 0 ? "merge" : "replace";
   if (backupImportPassphraseInput) backupImportPassphraseInput.value = "";
   renderBackupReview(backup);
@@ -2254,23 +2288,75 @@ async function stageBackupImport(file) {
     backupReviewDialog.showModal();
     return;
   }
-  await importBackupFile(file, backup);
+  await importBackupFile(file, backup, rawBackup);
 }
 async function commitBackupImport() {
   if (!backupImportState) return;
   const mode = backupImportMode?.value || (entries.length > 0 ? "merge" : "replace");
   if (mode === "replace" && entries.length > 0) {
     const confirmed = await showConfirmDialog(
-      "Replace entire vault?",
-      `This will delete all ${entries.length} existing entr${entries.length === 1 ? "y" : "ies"} and replace them with the backup contents. This action cannot be undone.`
+      t("confirm.replaceVaultTitle"),
+      t("confirm.replaceVaultText", { count: entries.length, plural: entries.length === 1 ? "y" : "ies" })
     );
     if (!confirmed) {
-      setSettingsStatus("Backup import cancelled", "warning");
+      setSettingsStatus(t("backup.importCancelled"), "warning");
       return;
     }
   }
-  await importBackupFile(backupImportState.file, backupImportState.backup);
+  await importBackupFile(backupImportState.file, backupImportState.backup, backupImportState.rawBackup);
 }
+// --- Single-entry QR export (move an entry to another authenticator app) ---
+
+async function openQrExport(entry) {
+  if (!qrExportDialog || !qrExportCanvas) return;
+  qrExportUri = buildOtpAuthUri(entry);
+  qrExportTitle.textContent = `${parseLabelParts(entry.label).issuer} — ${t("qr.heading")}`;
+  setStatus(qrExportStatus, "");
+  try {
+    await QRCode.toCanvas(qrExportCanvas, qrExportUri, {
+      width: 240,
+      margin: 2,
+      color: { dark: "#111318", light: "#ffffff" },
+    });
+    qrExportDialog.showModal();
+  } catch (error) {
+    reportError("QR export failed", error);
+    setImportStatus(toUserMessage(error, t("qr.renderFailed")), "error");
+  }
+}
+
+// --- Aegis / 2FAS export import (file-based third-party migration) ---
+
+async function importThirdPartyFile(file) {
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error(t("import.fileTooLarge"));
+  }
+  const text = await file.text();
+  const result = parseThirdPartyImport(text);
+  const warnings = [...result.warnings];
+  const candidates = [];
+  let skipped = 0;
+  let invalid = 0;
+  for (const candidate of result.entries) {
+    try {
+      const entry = normalizeEntry(candidate);
+      if (hasDuplicateEntry(entries, entry) || candidates.some((existing) => entryKey(existing) === entryKey(entry))) {
+        candidates.push({ ...entry, duplicateHint: true });
+        skipped += 1;
+        continue;
+      }
+      candidates.push(entry);
+    } catch (error) {
+      invalid += 1;
+      warnings.push(toUserMessage(error, t("import.mapFailed")));
+    }
+  }
+  if (candidates.length === 0) {
+    throw new Error(t("vault.noImportable", { source: result.format, details: warnings.length ? `: ${warnings.join(" ")}` : "" }));
+  }
+  openImportPreview({ candidates, skipped, invalid, warnings, sourceLabel: result.format }, result.format);
+}
+
 function registerCameraDetection(uri) {
   if (cameraDetection.uri === uri) {
     cameraDetection.hits += 1;
@@ -2310,7 +2396,7 @@ async function startCameraScan() {
       return;
     }
     if (!registerCameraDetection(otpUri)) {
-      setImportStatus("Potential OTP QR detected. Confirming with another frame...", "warning");
+      setImportStatus(t("import.scanConfirming"), "warning");
       return;
     }
     try {
@@ -2354,11 +2440,11 @@ function bindEvents() {
   document.getElementById("backup-reminder-dismiss")?.addEventListener("click", () => setBannerVisible("backup-reminder-banner", false));
   document.getElementById("check-drift-btn")?.addEventListener("click", async () => {
     if (!settings.timeDriftCheck) {
-      setSettingsStatus("Enable the time-drift check first", "warning");
+      setSettingsStatus(t("settings.driftCheckFirst"), "warning");
       return;
     }
     await checkTimeDrift();
-    setSettingsStatus("Time check complete — see the banner if your clock is off", "success");
+    setSettingsStatus(t("settings.driftCheckDone"), "success");
   });
   document.addEventListener("keydown", (event) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
@@ -2395,11 +2481,11 @@ function bindEvents() {
       periodInput.value = "30";
       counterField?.classList.add("hidden");
       syncSettingsUI();
-      setImportStatus("Entry added", "success");
+      setImportStatus(t("add.entryAdded"), "success");
       document.getElementById("add-dialog")?.close();
     } catch (error) {
       reportError("Manual entry failed", error);
-      setImportStatus(toUserMessage(error, "Could not add entry"), "error");
+      setImportStatus(toUserMessage(error, t("vault.addFailed")), "error");
     }
   });
   parseUriBtn.addEventListener("click", async () => {
@@ -2411,30 +2497,43 @@ function bindEvents() {
         return;
       }
       const uris = extractOtpAuthUris(uriInput.value);
-      if (uris.length === 0) throw new Error("No valid otpauth:// URI found");
+      if (uris.length === 0) throw new Error(t("import.noValidUri"));
       openImportPreview(buildPreviewCandidatesFromUris(uris, "URI"), "URI");
       uriInput.value = "";
     } catch (error) {
       reportError("URI import failed", error);
-      setImportStatus(toUserMessage(error, "Invalid URI"), "error");
+      setImportStatus(toUserMessage(error, t("import.invalidUri")), "error");
     }
   });
   importGaBtn?.addEventListener("click", async () => {
     try {
       const source = uriInput.value.trim();
       if (!source) {
-        throw new Error("Paste your Google Authenticator export (the otpauth-migration:// text or URI) first");
+        throw new Error(t("import.pasteGaFirst"));
       }
       const migration = collectMigrationPayloads(source);
       if (migration.payloads.length === 0) {
-        throw new Error(migration.warnings[0] || "No Google Authenticator export found in the pasted text");
+        throw new Error(migration.warnings[0] || t("import.noGaFound"));
       }
-      setImportStatus("Decoding Google Authenticator export...");
+      setImportStatus(t("import.decodingGa"));
       stageMigrationPayloads(migration.payloads, "Google Authenticator");
       uriInput.value = "";
     } catch (error) {
       reportError("GA import failed", error);
-      setImportStatus(toUserMessage(error, "Could not import the Google Authenticator export"), "error");
+      setImportStatus(toUserMessage(error, t("import.gaFailed")), "error");
+    }
+  });
+  importAppsInput?.addEventListener("change", async () => {
+    const [file] = importAppsInput.files || [];
+    if (!file) return;
+    setImportStatus(t("import.appsReading"));
+    try {
+      await importThirdPartyFile(file);
+    } catch (error) {
+      reportError("Aegis/2FAS import failed", error);
+      setImportStatus(toUserMessage(error, t("import.appsFileFailed")), "error");
+    } finally {
+      importAppsInput.value = "";
     }
   });
   qrFileInput.addEventListener("change", async () => {
@@ -2444,7 +2543,7 @@ function bindEvents() {
     const fileBtn = qrFileInput.closest(".file-btn");
     if (fileNameLabel) fileNameLabel.textContent = file.name;
     fileBtn?.classList.add("has-file");
-    setImportStatus("Reading QR file...");
+    setImportStatus(t("import.readingQrFile"));
     try {
       await importFromQrBlob(file, "QR file");
     } catch (error) {
@@ -2452,20 +2551,20 @@ function bindEvents() {
       setImportStatus(toUserMessage(error, "Failed to import QR file"), "error");
     } finally {
       qrFileInput.value = "";
-      if (fileNameLabel) fileNameLabel.textContent = "Choose image file…";
+      if (fileNameLabel) fileNameLabel.textContent = t("add.qrFileChoose");
       fileBtn?.classList.remove("has-file");
     }
   });
   importQrUrlBtn.addEventListener("click", async () => {
     const url = (qrUrlInput.value || "").trim();
     if (!url) {
-      setImportStatus("Please enter a QR image URL", "error");
+      setImportStatus(t("import.qrUrlRequired"), "error");
       return;
     }
-    setImportStatus("Fetching QR image URL...");
+    setImportStatus(t("import.fetchingQrUrl"));
     try {
       const response = await fetch(url);
-      if (!response.ok) throw new Error("Could not download QR image URL");
+      if (!response.ok) throw new Error(t("import.qrUrlDownloadFailed"));
       await importFromQrBlob(await response.blob(), "QR URL");
     } catch (error) {
       reportError("QR URL import failed", error);
@@ -2473,7 +2572,7 @@ function bindEvents() {
     }
   });
   importClipboardBtn.addEventListener("click", async () => {
-    setImportStatus("Reading clipboard...");
+    setImportStatus(t("import.readingClipboard"));
     try {
       if (navigator.clipboard && typeof navigator.clipboard.read === "function") {
         const items = await navigator.clipboard.read();
@@ -2491,7 +2590,7 @@ function bindEvents() {
         return;
       }
       const uris = extractOtpAuthUris(text);
-      if (uris.length === 0) throw new Error("Clipboard does not contain a valid OTP URI or QR image");
+      if (uris.length === 0) throw new Error(t("import.noClipboardUri"));
       openImportPreview(buildPreviewCandidatesFromUris(uris, "Clipboard"), "Clipboard");
     } catch (error) {
       reportError("Clipboard import failed", error);
@@ -2500,9 +2599,9 @@ function bindEvents() {
   });
   startCameraBtn.addEventListener("click", async () => {
     try {
-      setImportStatus("Starting camera...");
+      setImportStatus(t("import.startingCamera"));
       await startCameraScan();
-      setImportStatus("Camera ready. Hold a QR code in front of it.", "");
+      setImportStatus(t("import.cameraReady"), "");
     } catch (error) {
       reportError("Camera start failed", error);
       setImportStatus(toUserMessage(error, "Could not start camera"), "error");
@@ -2515,24 +2614,24 @@ function bindEvents() {
       return;
     }
     stopCameraScan();
-    setImportStatus("Camera stopped");
+    setImportStatus(t("import.cameraStopped"));
   });
   clearAllBtn.addEventListener("click", async () => {
     try {
       if (entries.length === 0) {
-        setImportStatus("No entries to clear", "warning");
+        setImportStatus(t("vault.noEntriesToClear"), "warning");
         return;
       }
       const confirmed = await showConfirmDialog(
-        "Clear all entries?",
-        `This will permanently remove all ${entries.length} entr${entries.length === 1 ? "y" : "ies"} from your vault. This action cannot be undone.`
+        t("confirm.clearAllTitle"),
+        t("confirm.clearAllText", { count: entries.length, plural: entries.length === 1 ? "y" : "ies" })
       );
       if (!confirmed) return;
       await replaceEntries([]);
-      setImportStatus("All entries cleared", "success");
+      setImportStatus(t("vault.allCleared"), "success");
     } catch (error) {
       reportError("Clear all failed", error);
-      setImportStatus(toUserMessage(error, "Could not clear entries"), "error");
+      setImportStatus(toUserMessage(error, t("vault.clearFailed")), "error");
     }
   });
   searchInput.addEventListener("input", () => {
@@ -2553,13 +2652,13 @@ function bindEvents() {
   bulkTagApplyBtn?.addEventListener("click", async () => {
     const extraTags = normalizeTags(bulkTagInput.value);
     if (extraTags.length === 0) {
-      setImportStatus("Enter at least one tag for the selected entries", "warning");
+      setImportStatus(t("vault.tagsRequired"), "warning");
       return;
     }
     try {
       await replaceEntries(entries.map((entry) => selectedEntryIds.has(entry.id) ? { ...entry, tags: normalizeTags([...entry.tags || [], ...extraTags]) } : entry));
       bulkTagInput.value = "";
-      setImportStatus("Tags applied to selected entries", "success");
+      setImportStatus(t("vault.tagsApplied"), "success");
     } catch (error) {
       reportError("Bulk tag update failed", error);
       setImportStatus(toUserMessage(error, "Could not update selected entries"), "error");
@@ -2570,8 +2669,8 @@ function bindEvents() {
       const count = selectedEntryIds.size;
       if (count === 0) return;
       const confirmed = await showConfirmDialog(
-        "Remove selected entries?",
-        `This will remove ${count} selected entr${count === 1 ? "y" : "ies"} from your vault. You can undo for 10 seconds.`
+        t("confirm.bulkRemoveTitle"),
+        t("confirm.bulkRemoveText", { count, plural: count === 1 ? "y" : "ies" })
       );
       if (!confirmed) return;
       const removedItems = entries
@@ -2580,11 +2679,11 @@ function bindEvents() {
       await replaceEntries(entries.filter((entry) => !selectedEntryIds.has(entry.id)));
       selectedEntryIds.clear();
       renderBulkBar();
-      setImportStatus("Selected entries removed", "success");
+      setImportStatus(t("vault.selectedRemoved"), "success");
       await offerUndoDelete(removedItems);
     } catch (error) {
       reportError("Bulk remove failed", error);
-      setImportStatus(toUserMessage(error, "Could not remove selected entries"), "error");
+      setImportStatus(toUserMessage(error, t("vault.bulkRemoveFailed")), "error");
     }
   });
   settingsForm?.addEventListener("submit", async (event) => {
@@ -2599,10 +2698,10 @@ function bindEvents() {
   exportBackupBtn.addEventListener("click", async () => {
     try {
       await exportBackup();
-      setSettingsStatus("Backup exported", "success");
+      setSettingsStatus(t("settings.exportBackupDone"), "success");
     } catch (error) {
       reportError("Backup export failed", error);
-      setSettingsStatus(toUserMessage(error, "Could not export backup"), "error");
+      setSettingsStatus(toUserMessage(error, t("settings.exportBackupFailed")), "error");
     }
   });
   changePassphraseBtn?.addEventListener("click", () => {
@@ -2684,13 +2783,13 @@ function bindEvents() {
       operationDepth += 1;
       try {
         await enrollVaultBiometrics();
-        setSettingsStatus("Biometric unlock enabled on this device", "success");
+        setSettingsStatus(t("settings.biometricEnabled"), "success");
       } finally {
         operationDepth -= 1;
       }
     } catch (error) {
       reportError("Biometric enrollment failed", error);
-      setSettingsStatus(toUserMessage(error, "Could not enable biometric unlock"), "error");
+      setSettingsStatus(toUserMessage(error, t("vault.biometricEnrollmentFailed")), "error");
       renderBiometricControls();
     }
   });
@@ -2704,7 +2803,7 @@ function bindEvents() {
       }
     } catch (error) {
       reportError("Biometric disenroll failed", error);
-      setSettingsStatus(toUserMessage(error, "Could not disable biometric unlock"), "error");
+      setSettingsStatus(toUserMessage(error, t("vault.biometricDisenrollFailed")), "error");
     }
   });
   unlockForm?.addEventListener("submit", async (event) => {
@@ -2712,7 +2811,7 @@ function bindEvents() {
     const guard = readUnlockGuard();
     const now = Date.now();
     if (guard.lockedUntil > now) {
-      setUnlockStatus(`Too many failed attempts — unlock available in ${Math.ceil((guard.lockedUntil - now) / 1000)}s`, "error");
+      setUnlockStatus(t("vault.tooManyAttempts", { seconds: Math.ceil((guard.lockedUntil - now) / 1000) }), "error");
       return;
     }
     unlockBtn.disabled = true;
@@ -2726,7 +2825,7 @@ function bindEvents() {
       const attempts = guard.attempts + 1;
       const backoff = unlockBackoffSeconds(attempts);
       writeUnlockGuard({ attempts, lockedUntil: attempts >= 3 ? now + backoff * 1000 : 0 });
-      const suffix = attempts >= 3 ? ` Locked for ${backoff}s.` : "";
+      const suffix = attempts >= 3 ? t("vault.lockedForSuffix", { seconds: backoff }) : "";
       reportError("Vault unlock failed", error);
       setUnlockStatus(toUserMessage(error, t("unlock.statusFailed")) + suffix, "error");
     } finally {
@@ -2762,7 +2861,7 @@ function bindEvents() {
       importDialog.close();
     } catch (error) {
       reportError("Import preview commit failed", error);
-      setImportStatus(toUserMessage(error, "Could not import entries"), "error");
+      setImportStatus(toUserMessage(error, t("import.commitFailed")), "error");
     }
   });
   importDialog?.addEventListener("close", () => {
@@ -2796,13 +2895,35 @@ function bindEvents() {
     try {
       await saveEditedEntry();
       editEntryDialog.close();
-      setImportStatus("Entry updated", "success");
+      setImportStatus(t("entries.updated"), "success");
     } catch (error) {
-      setStatus(editEntryStatus, toUserMessage(error, "Could not update entry"), "error");
+      setStatus(editEntryStatus, toUserMessage(error, t("vault.updateFailed")), "error");
     }
   });
   editEntryDialog?.addEventListener("close", () => {
     setStatus(editEntryStatus, "");
+  });
+  copyQrUriBtn?.addEventListener("click", async () => {
+    if (!qrExportUri) return;
+    try {
+      await navigator.clipboard.writeText(qrExportUri);
+      setStatus(qrExportStatus, t("qr.copiedUri"), "success");
+    } catch (error) {
+      reportError("QR URI copy failed", error);
+      setStatus(qrExportStatus, toUserMessage(error, t("toast.copyFailed")), "error");
+    }
+  });
+  downloadQrBtn?.addEventListener("click", () => {
+    if (!qrExportCanvas) return;
+    qrExportCanvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "otp-entry-qr.png";
+      link.click();
+      URL.revokeObjectURL(url);
+    }, "image/png");
   });
   confirmForm?.addEventListener("submit", (event) => {
     if (event.submitter?.value !== "accept") {

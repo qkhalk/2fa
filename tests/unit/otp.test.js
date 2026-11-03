@@ -14,6 +14,7 @@ import {
   normalizeEntries,
   normalizeEntry,
   parseOtpAuthUri,
+  buildOtpAuthUri,
 } from "../../lib/otp.js";
 
 describe("otp helpers", () => {
@@ -315,5 +316,55 @@ describe("otp helpers", () => {
     // Non-finite or empty inputs keep positions stable.
     expect(computeDropIndex(midpoints, 1, Number.NaN)).toBe(3);
     expect(computeDropIndex([], 0, 10)).toBe(0);
+  });
+});
+
+describe("buildOtpAuthUri", () => {
+  const baseEntry = {
+    label: "GitHub:user@example.com",
+    secret: "JBSWY3DPEHPK3PXP",
+    type: "totp",
+    algorithm: "SHA1",
+    digits: 6,
+    period: 30,
+    counter: 0,
+  };
+
+  it("round-trips a default TOTP entry through parseOtpAuthUri", () => {
+    const parsed = parseOtpAuthUri(buildOtpAuthUri(baseEntry));
+    expect(parsed.label).toBe("GitHub:user@example.com");
+    expect(parsed.secret).toBe("JBSWY3DPEHPK3PXP");
+    expect(parsed.type).toBe("totp");
+    expect(parsed.algorithm).toBe("SHA1");
+    expect(parsed.digits).toBe(6);
+    expect(parsed.period).toBe(30);
+  });
+
+  it("round-trips a non-default HOTP entry with counter, algorithm, and digits", () => {
+    const parsed = parseOtpAuthUri(buildOtpAuthUri({
+      ...baseEntry,
+      type: "hotp",
+      algorithm: "SHA256",
+      digits: 8,
+      counter: 7,
+      label: "Identity Server",
+    }));
+    expect(parsed.type).toBe("hotp");
+    expect(parsed.algorithm).toBe("SHA256");
+    expect(parsed.digits).toBe(8);
+    expect(parsed.counter).toBe(7);
+    expect(parsed.label).toBe("Identity Server");
+  });
+
+  it("round-trips a custom TOTP period and a label without an issuer colon", () => {
+    const parsed = parseOtpAuthUri(buildOtpAuthUri({ ...baseEntry, period: 60, label: "Solo Entry" }));
+    expect(parsed.period).toBe(60);
+    expect(parsed.label).toBe("Solo Entry");
+  });
+
+  it("omits the issuer param when the label has no colon so parsing stays consistent", () => {
+    const uri = buildOtpAuthUri({ ...baseEntry, label: "No Colon" });
+    expect(uri).not.toContain("issuer=");
+    expect(parseOtpAuthUri(uri).label).toBe("No Colon");
   });
 });
